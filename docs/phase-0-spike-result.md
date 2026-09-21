@@ -1,5 +1,13 @@
 # Phase 0 spike result: stop, the premise was wrong
 
+> **AMENDED same day by live testing on ISC.** Everything below about shadow DOM
+> is correct: agent-browser reads through shadow roots, including closed ones, and
+> a page-script walker cannot beat it. But the conclusion that ISC was therefore a
+> pure usage error is **wrong**. On real Lightning, `fill` and `type` resolve the
+> element, report `success`, and silently do nothing, while `eval` writing to the
+> same node persists. See [`isc-live-findings.md`](isc-live-findings.md) for the
+> evidence and the narrower, better-justified build list that came out of it.
+
 Run 2026-09-21. Verdict: **do not build the 29-tool parity layer.** The shadow DOM problem that justified this project does not exist in agent-browser, and the ISC failure it was meant to fix is almost certainly a usage error with a zero-code fix.
 
 ## What the spike was supposed to answer

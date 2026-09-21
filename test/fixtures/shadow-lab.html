@@ -63,6 +63,26 @@
   <button id="covered-button">COVERED_BUTTON</button>
 </section>
 
+<section>
+  <h2>8. LWC-like wrapper, reproduces the live ISC write bug</h2>
+  <!-- Host carries the same aria-label as its inner input AND has its own inert
+       value accessor, exactly like lightning-input. Writing to the host silently
+       does nothing. This is the bug that made fill/type report success on ISC. -->
+  <fake-lightning-input></fake-lightning-input>
+  <fake-lightning-button></fake-lightning-button>
+</section>
+
+<section>
+  <h2>9. input whose value setter is shadowed by framework code</h2>
+  <input id="shadowed-input" aria-label="SHADOWED_FIELD" placeholder="SHADOWED_FIELD">
+</section>
+
+<section>
+  <h2>10. disabled and readonly fields, writes must refuse</h2>
+  <input id="disabled-input" aria-label="DISABLED_FIELD" disabled>
+  <input id="readonly-input" aria-label="READONLY_FIELD" readonly>
+</section>
+
 <div id="overlay"></div>
 
 <script>
@@ -114,9 +134,64 @@ class ClosedHost extends HTMLElement {
   }
 }
 customElements.define("closed-host", ClosedHost);
+
+// ---- 8. LWC-like wrapper: host aria-label + inert host value accessor --------
+class FakeLightningInput extends HTMLElement {
+  connectedCallback() {
+    const r = this.attachShadow({ mode: "open" });
+    r.innerHTML =
+      '<input aria-label="LWC_FIELD" placeholder="LWC_FIELD" ' +
+      'style="min-width:150px;min-height:26px">';
+    // The host advertises the same accessible name as its inner input, so a naive
+    // name match finds the host first. Real lightning-input does exactly this.
+    this.setAttribute("aria-label", "LWC_FIELD");
+    this.style.display = "block";
+    this.style.minHeight = "30px";
+    this.style.minWidth = "160px";
+    // An inert value accessor: assigning it stores an expando and never reaches
+    // the inner input. This is what makes a host write silently succeed.
+    let stash = "";
+    Object.defineProperty(this, "value", {
+      get() { return stash; },
+      set(v) { stash = v; },
+      configurable: true
+    });
+    // Counts events that crossed the shadow boundary. Only composed:true events
+    // reach a listener on the host, so this proves the event flags are right.
+    window.__lwcHostEvents = { input: 0, change: 0 };
+    this.addEventListener("input", () => { window.__lwcHostEvents.input++; });
+    this.addEventListener("change", () => { window.__lwcHostEvents.change++; });
+  }
+}
+customElements.define("fake-lightning-input", FakeLightningInput);
+
+class FakeLightningButton extends HTMLElement {
+  connectedCallback() {
+    const r = this.attachShadow({ mode: "open" });
+    r.innerHTML = '<button style="min-width:150px;min-height:26px">LWC_BUTTON</button>';
+    this.setAttribute("aria-label", "LWC_BUTTON");
+    this.style.display = "block";
+    r.querySelector("button").addEventListener("click", () => {
+      window.__lwcButtonClicks = (window.__lwcButtonClicks || 0) + 1;
+    });
+  }
+}
+customElements.define("fake-lightning-button", FakeLightningButton);
+
+// ---- 9. shadow the native value SETTER only, leave the getter honest ---------
+(function () {
+  const el = document.getElementById("shadowed-input");
+  const nativeGet = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").get;
+  Object.defineProperty(el, "value", {
+    get() { return nativeGet.call(this); },
+    set(_v) { /* swallowed, simulating framework interference */ },
+    configurable: true
+  });
+})();
 </script>
 
 <script src="../../scripts/out/walker.min.js"></script>
+<script src="../../scripts/out/actions.min.js"></script>
 
 <script>
 // ---------------------------------------------------------------------------
@@ -222,6 +297,123 @@ window.__layaLab = {
       piercedCount: snap3.elements.length,
       flatCount: flat.elements.length,
       names: names
+    };
+  },
+
+  // -------------------------------------------------------------------------
+  // Action layer tests. Separate entrypoint so each can be read on its own.
+  // -------------------------------------------------------------------------
+  runActions: function () {
+    var results = [];
+    function check(label, actual, expected, cmp) {
+      var ok = cmp ? cmp(actual, expected) : actual === expected;
+      results.push({ ok: !!ok, label: label, actual: actual, expected: expected });
+    }
+    var truthy = function (a) { return !!a; };
+    var contains = function (a, b) { return String(a).indexOf(b) !== -1; };
+    var L = window.__laya;
+
+    function innerLwcInput() {
+      var host = document.querySelector("fake-lightning-input");
+      return host && host.shadowRoot ? host.shadowRoot.querySelector("input") : null;
+    }
+
+    // --- control: reproduce the bug. A naive host write must do nothing. -----
+    var host = document.querySelector("fake-lightning-input");
+    host.value = "naive host write";
+    check("BUG REPRODUCED: host write leaves inner input empty", innerLwcInput().value, "");
+    check("BUG REPRODUCED: host reports the value it swallowed", host.value, "naive host write");
+
+    // --- the fix: target the host, layer must descend to the inner input ----
+    var w = L.writeText({ css: "fake-lightning-input" }, "lwc value");
+    check("host-targeted write succeeds", w.ok, true);
+    check("host-targeted write is verified", w.verified, true);
+    check("host-targeted write descended", w.descendedToInnerNode, true);
+    check("descended from the right host", w.hostTag, "fake-lightning-input");
+    check("inner input actually holds the value", innerLwcInput().value, "lwc value");
+    check("used the native setter", w.setterUsed, "nativeSetter");
+
+    // --- isolate the cause: without descent the same write silently fails ---
+    // The host echoes the assigned value back, so verifying against the host
+    // would ALSO report success. This is the exact shape of the Lightning bug.
+    var noD = L.writeText({ css: "fake-lightning-input" }, "should not persist", { noDescend: true });
+    check("noDescend write reports failure, not success", noD.ok, false);
+    check("noDescend failure is caught at verify", noD.stage, "verify");
+    check("noDescend detects the host echo", noD.hostEchoedValue, true);
+    check("host claims it holds the value", noD.writtenNodeReports, "should not persist");
+    check("noDescend reason names the host echo", noD.reason, "echoed the value back", contains);
+    check("noDescend did not touch the inner input", innerLwcInput().value, "lwc value");
+
+    // --- composed:true actually crossed the boundary ------------------------
+    check("input event crossed the shadow boundary", window.__lwcHostEvents.input, 1, function (a, b) { return a >= b; });
+    check("change event crossed the shadow boundary", window.__lwcHostEvents.change, 1, function (a, b) { return a >= b; });
+    check("write reports both events fired",
+      w.eventsFired.indexOf("input") !== -1 && w.eventsFired.indexOf("change") !== -1, true);
+
+    // --- name matching prefers the inner native node over the host ---------
+    var ins = L.inspect({ ariaLabel: "LWC_FIELD" });
+    check("name match resolves to the inner input, not the host", ins.matched.tag, "input");
+    check("inspect reports it is unreachable by querySelector", ins.reachableByQuerySelector, "no-id");
+
+    // --- framework-shadowed value setter -----------------------------------
+    var sh = document.getElementById("shadowed-input");
+    sh.value = "plain assignment";
+    check("CONTROL: plain assignment is swallowed", sh.value, "");
+    var w2 = L.writeText({ ariaLabel: "SHADOWED_FIELD" }, "native setter wins");
+    check("native setter defeats the shadowed setter", w2.ok, true);
+    check("shadowed-setter field holds the value", sh.value, "native setter wins");
+
+    // --- writes into a real shadow root ------------------------------------
+    // that input carries a placeholder, not an aria-label
+    var w3 = L.writeText({ placeholder: "SHADOW_1_INPUT" }, "into depth 1");
+    check("write into depth-1 shadow root succeeds", w3.ok, true);
+    check("depth-1 write needed no descent", w3.descendedToInnerNode, false);
+    var w3b = L.writeText({ ariaLabel: "SHADOW_1_INPUT" }, "x");
+    check("matching on the wrong attribute fails at resolve", w3b.stage, "resolve");
+
+    // --- refusals ----------------------------------------------------------
+    var wd = L.writeText({ ariaLabel: "DISABLED_FIELD" }, "x");
+    check("disabled field refuses", wd.ok, false);
+    check("disabled refusal is a precheck", wd.stage, "precheck");
+    check("disabled reason names the cause", wd.reason, "disabled", contains);
+
+    var wr = L.writeText({ ariaLabel: "READONLY_FIELD" }, "x");
+    check("readOnly field refuses", wr.ok, false);
+    check("readOnly refusal is a precheck", wr.stage, "precheck");
+
+    var wm = L.writeText({ ariaLabel: "NO_SUCH_FIELD" }, "x");
+    check("missing target fails at resolve", wm.stage, "resolve");
+    check("missing target is not ok", wm.ok, false);
+
+    var stale = L.writeText({ ref: 99999 }, "x");
+    check("stale ref fails at resolve", stale.stage, "resolve");
+    check("stale ref explains itself", stale.reason, "stale", contains);
+
+    // --- click descends through the host -----------------------------------
+    window.__lwcButtonClicks = 0;
+    var c = L.clickDeep({ css: "fake-lightning-button" });
+    check("click succeeds", c.ok, true);
+    check("click descended to the inner button", c.descendedToInnerNode, true);
+    check("inner button handler actually ran", window.__lwcButtonClicks, 1);
+
+    // --- select ------------------------------------------------------------
+    var s = L.selectOption({ css: "#light-select" }, "beta");
+    check("native select works", s.ok, true);
+    check("native select verified", s.valueAfter, "beta");
+
+    var s2 = L.selectOption({ css: "fake-lightning-input" }, "beta");
+    check("non-select refuses with a useful hint", s2.ok, false);
+    check("hint mentions the button-plus-listbox pattern", s2.reason, "listbox", contains);
+
+    // --- readValue round-trips --------------------------------------------
+    check("readValue reads through the host", L.readValue({ css: "fake-lightning-input" }), "lwc value");
+
+    var failed = results.filter(function (r) { return !r.ok; });
+    return {
+      actionsVersion: L.actionsVersion,
+      passed: results.length - failed.length,
+      total: results.length,
+      failures: failed
     };
   }
 };
