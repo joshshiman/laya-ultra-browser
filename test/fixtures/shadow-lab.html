@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>laya shadow lab</title>
+<style>
+  body { font: 13px system-ui; margin: 16px; }
+  section { border: 1px solid #ccc; padding: 8px; margin-bottom: 8px; }
+  h2 { font-size: 12px; margin: 0 0 6px; color: #555; text-transform: uppercase; }
+  button, input { min-width: 150px; min-height: 26px; display: block; margin: 2px 0; }
+  #overlay {
+    position: fixed; left: 0; top: 0; width: 100%; height: 100%;
+    background: rgba(0,0,0,0.001); z-index: 9999; display: none;
+  }
+  .far { position: absolute; top: 4000px; left: 10px; }
+</style>
+</head>
+<body>
+
+<section>
+  <h2>1. light DOM baseline</h2>
+  <button id="light-button">LIGHT_BUTTON</button>
+  <input id="light-input" placeholder="LIGHT_INPUT">
+  <select id="light-select"><option>alpha</option><option>beta</option></select>
+</section>
+
+<section>
+  <h2>2. one open shadow root</h2>
+  <open-host-1></open-host-1>
+</section>
+
+<section>
+  <h2>3. three nested open shadow roots</h2>
+  <nest-a></nest-a>
+</section>
+
+<section>
+  <h2>4. closed shadow root, should be unreachable</h2>
+  <closed-host></closed-host>
+</section>
+
+<section>
+  <h2>5. same-origin iframes</h2>
+  <!-- src= across file:// URLs is blocked by Chrome's opaque file origins unless
+       --allow-file-access-from-files is set, so this one is expected to fail
+       under file://. It works over http(s). -->
+  <iframe id="same-origin" src="inner-frame.html" style="width:320px;height:70px;border:1px solid #999"></iframe>
+  <!-- srcdoc inherits the embedding document's origin, so this exercises the
+       same contentDocument code path without needing a web server. -->
+  <iframe id="srcdoc-frame" style="width:320px;height:70px;border:1px solid #999"
+    srcdoc="&lt;body style='margin:0;font:12px system-ui'&gt;&lt;button style='min-width:140px;min-height:26px'&gt;SRCDOC_BUTTON&lt;/button&gt;&lt;input placeholder='SRCDOC_INPUT' style='min-width:140px;min-height:24px'&gt;&lt;/body&gt;"></iframe>
+</section>
+
+<section>
+  <h2>6. hidden and offscreen controls, should be skipped</h2>
+  <button id="hidden-button" style="display:none">HIDDEN_BUTTON</button>
+  <button id="invisible-button" style="visibility:hidden">INVISIBLE_BUTTON</button>
+  <button id="offscreen-button" class="far">OFFSCREEN_BUTTON</button>
+</section>
+
+<section>
+  <h2>7. covered control, tests deep hit-testing</h2>
+  <button id="covered-button">COVERED_BUTTON</button>
+</section>
+
+<div id="overlay"></div>
+
+<script>
+// ---- 2. single open shadow root -------------------------------------------
+class OpenHost1 extends HTMLElement {
+  connectedCallback() {
+    const r = this.attachShadow({ mode: "open" });
+    r.innerHTML = `
+      <button id="s1-button" style="min-width:150px;min-height:26px">SHADOW_1_BUTTON</button>
+      <input id="s1-input" placeholder="SHADOW_1_INPUT" style="min-width:150px;min-height:26px">
+    `;
+  }
+}
+customElements.define("open-host-1", OpenHost1);
+
+// ---- 3. three levels of nesting -------------------------------------------
+class NestC extends HTMLElement {
+  connectedCallback() {
+    const r = this.attachShadow({ mode: "open" });
+    r.innerHTML = `<button id="s3-button" style="min-width:150px;min-height:26px">SHADOW_3_BUTTON</button>`;
+  }
+}
+customElements.define("nest-c", NestC);
+
+class NestB extends HTMLElement {
+  connectedCallback() {
+    const r = this.attachShadow({ mode: "open" });
+    r.innerHTML = `<nest-c></nest-c>`;
+  }
+}
+customElements.define("nest-b", NestB);
+
+class NestA extends HTMLElement {
+  connectedCallback() {
+    const r = this.attachShadow({ mode: "open" });
+    r.innerHTML = `<nest-b></nest-b>`;
+  }
+}
+customElements.define("nest-a", NestA);
+
+// ---- 4. closed shadow root ------------------------------------------------
+class ClosedHost extends HTMLElement {
+  connectedCallback() {
+    const r = this.attachShadow({ mode: "closed" });
+    r.innerHTML = `<button id="closed-button" style="min-width:150px;min-height:26px">CLOSED_BUTTON</button>`;
+    this.style.display = "block";
+    this.style.minHeight = "30px";
+    this.style.minWidth = "160px";
+  }
+}
+customElements.define("closed-host", ClosedHost);
+</script>
+
+<script src="../../scripts/out/walker.min.js"></script>
+
+<script>
+// ---------------------------------------------------------------------------
+// Self-checking harness. window.__layaLab.run() returns pass/fail per assertion
+// so a single cheap eval tells us everything.
+// ---------------------------------------------------------------------------
+window.__layaLab = {
+  run: function () {
+    var results = [];
+    function check(label, actual, expected, cmp) {
+      var ok = cmp ? cmp(actual, expected) : actual === expected;
+      results.push({ ok: !!ok, label: label, actual: actual, expected: expected });
+    }
+    var gte = function (a, b) { return a >= b; };
+
+    var snap = window.__laya.snapshot({ withPaths: true, includeCovered: true, includeOffscreen: false });
+    var names = snap.elements.map(function (e) { return e.name; });
+    var has = function (n) { return names.indexOf(n) !== -1; };
+
+    // piercing works
+    check("finds light DOM button", has("LIGHT_BUTTON"), true);
+    check("finds depth-1 shadow button", has("SHADOW_1_BUTTON"), true);
+    check("finds depth-1 shadow input", has("SHADOW_1_INPUT"), true);
+    check("finds depth-3 nested shadow button", has("SHADOW_3_BUTTON"), true);
+    // src= frames only work over http(s); srcdoc exercises the same code path
+    // under file:// because it inherits the parent origin.
+    check("finds srcdoc frame button", has("SRCDOC_BUTTON"), true);
+    check("finds srcdoc frame input", has("SRCDOC_INPUT"), true);
+    results.push({
+      ok: true, label: "NOTE src= frame reachable (http only, informational)",
+      actual: has("FRAME_BUTTON"), expected: "true over http, false over file"
+    });
+
+    // closed roots are genuinely unreachable, and we say so
+    check("does NOT find closed-root button", has("CLOSED_BUTTON"), false);
+    check("counts >=1 suspected closed root", snap.stats.suspectedClosedShadowRoots, 1, gte);
+
+    // hidden and offscreen are excluded
+    check("excludes display:none button", has("HIDDEN_BUTTON"), false);
+    check("excludes visibility:hidden button", has("INVISIBLE_BUTTON"), false);
+    check("excludes offscreen button", has("OFFSCREEN_BUTTON"), false);
+
+    // depth accounting
+    check("max shadow depth is 3", snap.stats.maxShadowDepth, 3, gte);
+    check("entered >=4 open shadow roots", snap.stats.openShadowRootsEntered, 4, gte);
+    check("entered >=1 same-origin frame", snap.stats.sameOriginFramesEntered, 1, gte);
+    check("frameDepth set on frame control",
+      (snap.elements.filter(function (e) { return e.name === "SRCDOC_BUTTON"; })[0] || {}).frameDepth, 1);
+    check("unlabelled select gets a fallback name",
+      names.filter(function (n) { return n === ""; }).length, 0);
+
+    // refs resolve, including through shadow boundaries
+    var shadowEntry = snap.elements.filter(function (e) { return e.name === "SHADOW_3_BUTTON"; })[0];
+    check("depth-3 ref resolves to a live node",
+      shadowEntry ? !!window.__laya.resolve(shadowEntry.ref) : false, true);
+    check("depth-3 ref reports fresh",
+      shadowEntry ? window.__laya.fresh(shadowEntry.ref) : false, true);
+    check("bogus ref does not resolve", window.__laya.resolve(99999), null);
+
+    // occlusion: raise the overlay and confirm the covered button flips
+    document.getElementById("overlay").style.display = "block";
+    var snap2 = window.__laya.snapshot({ includeCovered: false });
+    var names2 = snap2.elements.map(function (e) { return e.name; });
+    check("overlay hides covered button", names2.indexOf("COVERED_BUTTON") === -1, true);
+    check("skippedCovered counted", snap2.stats.skippedCovered, 1, gte);
+    document.getElementById("overlay").style.display = "none";
+
+    var snap3 = window.__laya.snapshot({ includeCovered: false });
+    var names3 = snap3.elements.map(function (e) { return e.name; });
+    check("covered button returns after overlay removed", names3.indexOf("COVERED_BUTTON") !== -1, true);
+
+    // the control comparison: flat walk must find strictly fewer
+    var flat = window.__laya.snapshot({ pierceShadow: false, pierceFrames: false });
+    check("piercing finds more than flat walk", snap3.elements.length > flat.elements.length, true);
+
+    // Determinism. Repeated snapshots with identical options must agree. This is
+    // the assertion that caught the iframe coordinate-space bug, where in-frame
+    // occlusion was hit-tested against the top document and flapped run to run.
+    var a = window.__laya.snapshot({ includeCovered: true });
+    var b = window.__laya.snapshot({ includeCovered: true });
+    var c = window.__laya.snapshot({ includeCovered: true });
+    check("snapshot is stable across repeats (count)",
+      a.elements.length === b.elements.length && b.elements.length === c.elements.length, true);
+    check("snapshot is stable across repeats (names)",
+      JSON.stringify(a.elements.map(function (e) { return e.name; })) ===
+      JSON.stringify(c.elements.map(function (e) { return e.name; })), true);
+    check("pierced count matches names length", a.elements.length, names.length);
+
+    // in-frame controls carry a top-document box for overlays and coord input
+    var inFrame = a.elements.filter(function (e) { return e.frameDepth > 0; });
+    check("in-frame controls found", inFrame.length, 1, gte);
+    check("in-frame controls carry topBox",
+      inFrame.every(function (e) { return e.topBox && typeof e.topBox.y === "number"; }), true);
+    check("in-frame topBox is offset from local box",
+      inFrame.some(function (e) { return e.topBox.y !== e.box.y; }), true);
+
+    var failed = results.filter(function (r) { return !r.ok; });
+    return {
+      walkerVersion: window.__laya.walkerVersion,
+      passed: results.length - failed.length,
+      total: results.length,
+      failures: failed,
+      piercedCount: snap3.elements.length,
+      flatCount: flat.elements.length,
+      names: names
+    };
+  }
+};
+</script>
+</body>
+</html>

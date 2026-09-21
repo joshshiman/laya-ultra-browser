@@ -1,0 +1,30 @@
+{
+  "name": "laya-ultra-browser",
+  "version": "0.0.1",
+  "private": true,
+  "description": "A local browser MCP server with shadow-DOM-piercing snapshots, drop-in compatible with agent-browser, optionally backed by a local Laya decision model.",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "bin": {
+    "laya-ultra-browser": "./dist/server.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsc -p tsconfig.json --watch",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --test test/",
+    "check": "npm run typecheck && npm test",
+    "build:walker": "node scripts/build-walker.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "playwright-core": "^1.48.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.6.0"
+  }
+}
