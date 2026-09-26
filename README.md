@@ -406,6 +406,12 @@ cd laya-ultra-browser && npm install && npm run build
 
 Then use `command: "node"` with `args: ["/absolute/path/to/laya-ultra-browser/dist/server.js"]`.
 
+**Model download is slow or rate-limited**
+
+The first run pulls roughly 2 GB of weights from Hugging Face, unauthenticated by
+default. Set `HF_TOKEN` in the config block and the download is faster and far less
+likely to hit a limit. The weights are cached, so this is a one-time cost.
+
 **`browser_status` says Laya is unavailable**
 
 It lists every interpreter it tried. Run `npm run laya:check`, or point

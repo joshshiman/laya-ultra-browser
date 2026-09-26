@@ -100,6 +100,10 @@ PY
 
 step "Warming the model"
 say "first run downloads the checkpoint, roughly 2GB, and can take a few minutes"
+if [ -z "${HF_TOKEN:-}" ]; then
+  say "no HF_TOKEN set, so the download is unauthenticated and may hit a rate limit."
+  say "export HF_TOKEN=... before running this if that happens."
+fi
 LAYA_MODEL="$MODEL" LAYA_CHECKPOINT="$CHECKPOINT" \
   "$VENV/bin/python" - "$MODEL" "$CHECKPOINT" <<'PY'
 import sys
