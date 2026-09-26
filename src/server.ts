@@ -23,6 +23,8 @@ import { ActionableError, describeError, log } from "./log.js";
 import {
   clickDeep,
   inspect as inspectTarget,
+  isFresh,
+  probeRef,
   readValue,
   selectOption,
   snapshot,
@@ -334,6 +336,17 @@ async function buildTarget(
   opts: { page: Awaited<ReturnType<typeof getPage>>; deterministic: boolean },
 ): Promise<{ target: Target; describe: string; notes: string[] }> {
   if (explicit.ref !== undefined) {
+    // Check the ref before acting on it. walker.js already fails closed on an
+    // unresolvable ref, but its message is generic; asking whether the node is still
+    // rendered and unoccluded turns "did not resolve" into the things that actually
+    // went wrong, which is the difference between a retryable error and a dead end.
+    if (!(await isFresh(opts.page, explicit.ref))) {
+      const why = await probeRef(opts.page, explicit.ref);
+      throw new ActionableError(
+        `ref ${explicit.ref} is stale: ${why}.`,
+        "Refs stay valid until the page navigates or the DOM is replaced. Call browser_snapshot again and use a ref from the new list, or pass a goal instead.",
+      );
+    }
     return { target: { ref: explicit.ref }, describe: `ref ${explicit.ref}`, notes: [] };
   }
   if (explicit.selector) {
@@ -633,6 +646,12 @@ server.registerTool(
           "Loading the Laya model timed out",
           "First run downloads roughly 2GB of weights. Raise LAYA_STARTUP_TIMEOUT_MS if it is still downloading.",
         );
+      } else {
+        // Report whatever the last warmup learned, so a status call after a ranking
+        // still shows the checkpoint's real context and option-head budget without
+        // paying to load it again.
+        const info = cachedInfo();
+        if (info) out.layaInfo = info;
       }
       return out;
     }),

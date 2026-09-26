@@ -250,3 +250,59 @@ export async function isFresh(page: Page, ref: number): Promise<boolean> {
     return w.__laya.fresh(r);
   }, ref);
 }
+
+/**
+ * Explains why a ref is not usable, in the caller's terms.
+ *
+ * `fresh()` collapses three different problems into one boolean: the node is gone, it
+ * is not rendered, or it is occluded. Only the first is fatal for a write, and each
+ * needs a different response, so the reason is worth the extra round trip.
+ */
+export async function probeRef(page: Page, ref: number): Promise<string> {
+  await ensureInjected(page);
+  return page.evaluate((r: number) => {
+    const w = window as unknown as {
+      __laya: { resolve: (x: number) => Element | null };
+    };
+    const el = w.__laya.resolve(r);
+    if (!el) return "the node is no longer in the document";
+
+    const view = el.ownerDocument?.defaultView ?? window;
+    let rect: DOMRect | null = null;
+    let rendered = false;
+    try {
+      rect = el.getBoundingClientRect();
+      const style = view.getComputedStyle(el);
+      rendered =
+        !!style &&
+        style.display !== "none" &&
+        style.visibility !== "hidden" &&
+        style.visibility !== "collapse" &&
+        parseFloat(style.opacity || "1") > 0 &&
+        (rect.width > 0 || rect.height > 0);
+    } catch {
+      rendered = false;
+    }
+    if (!rendered) return "it is hidden, collapsed or has zero size";
+
+    if (rect) {
+      const vw = view.innerWidth || el.ownerDocument?.documentElement.clientWidth || 1;
+      const vh = view.innerHeight || el.ownerDocument?.documentElement.clientHeight || 1;
+      if (rect.bottom <= 0 || rect.right <= 0 || rect.top >= vh || rect.left >= vw) {
+        return "it is scrolled out of view";
+      }
+      const x = Math.min(Math.max(rect.left + rect.width / 2, 1), vw - 1);
+      const y = Math.min(Math.max(rect.top + rect.height / 2, 1), vh - 1);
+      let hit: Element | null = null;
+      try {
+        hit = el.ownerDocument?.elementFromPoint(x, y) ?? null;
+      } catch {
+        hit = null;
+      }
+      if (hit && hit !== el && !el.contains(hit) && !hit.contains(el)) {
+        return "something is covering it, so a click would land on the wrong element";
+      }
+    }
+    return "it changed since the snapshot was taken";
+  }, ref);
+}

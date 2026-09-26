@@ -47,15 +47,11 @@ describe("visualizer event buffer", () => {
 
   it("keeps events in order", () => {
     for (let i = 0; i < 3; i++) {
-      record({
-        kind: "note",
-        level: "info",
-        message: `n${i}`,
-      });
+      record({ kind: "rank-pending", goal: `g${i}`, mode: "choice", candidateCount: i, total: 9 });
     }
     assert.deepEqual(
-      snapshot().map((e) => (e.kind === "note" ? e.message : "")),
-      ["n0", "n1", "n2"],
+      snapshot().map((e) => (e.kind === "rank-pending" ? e.goal : "")),
+      ["g0", "g1", "g2"],
     );
   });
 
@@ -63,13 +59,13 @@ describe("visualizer event buffer", () => {
     // A long session must not grow without bound, so the buffer is a ring.
     configure(3);
     for (let i = 0; i < 10; i++) {
-      record({ kind: "note", level: "info", message: `n${i}` });
+      record({ kind: "rank-pending", goal: `g${i}`, mode: "choice", candidateCount: i, total: 9 });
     }
     const kept = snapshot();
     assert.equal(kept.length, 3);
     assert.deepEqual(
-      kept.map((e) => (e.kind === "note" ? e.message : "")),
-      ["n7", "n8", "n9"],
+      kept.map((e) => (e.kind === "rank-pending" ? e.goal : "")),
+      ["g7", "g8", "g9"],
     );
   });
 
@@ -77,16 +73,16 @@ describe("visualizer event buffer", () => {
     // A zero or negative limit would make every record a no-op, which looks like the
     // visualizer is silently broken.
     configure(0);
-    record({ kind: "note", level: "info", message: "kept" });
+    record({ kind: "rank-pending", goal: "kept", mode: "choice", candidateCount: 1, total: 1 });
     assert.equal(snapshot().length, 1);
   });
 
   it("fans out to subscribers and stops after unsubscribe", () => {
     const seen: number[] = [];
     const off = subscribe((e) => seen.push(e.id));
-    record({ kind: "note", level: "info", message: "a" });
+    record({ kind: "rank-pending", goal: "a", mode: "choice", candidateCount: 1, total: 1 });
     off();
-    record({ kind: "note", level: "info", message: "b" });
+    record({ kind: "rank-pending", goal: "b", mode: "choice", candidateCount: 1, total: 1 });
     assert.equal(seen.length, 1);
   });
 
@@ -97,14 +93,16 @@ describe("visualizer event buffer", () => {
       throw new Error("subscriber is broken");
     });
     subscribe((e) => good.push(e.id));
-    assert.doesNotThrow(() => record({ kind: "note", level: "info", message: "x" }));
+    assert.doesNotThrow(() =>
+      record({ kind: "rank-pending", goal: "x", mode: "choice", candidateCount: 1, total: 1 }),
+    );
     assert.equal(good.length, 1);
   });
 
   it("hands out a copy, not the live array", () => {
-    record({ kind: "note", level: "info", message: "a" });
+    record({ kind: "rank-pending", goal: "a", mode: "choice", candidateCount: 1, total: 1 });
     const first = snapshot();
-    first.push({ kind: "note", id: 99, at: 0, level: "info", message: "injected" });
+    first.push({ kind: "rank-pending", id: 99, at: 0, goal: "injected", mode: "choice", candidateCount: 1, total: 1 });
     assert.equal(snapshot().length, 1);
   });
 
@@ -183,12 +181,12 @@ describe("visualizer http server", () => {
   it("serves the retained history as JSON", async () => {
     clear();
     configure(50);
-    record({ kind: "note", level: "info", message: "hello from the test" });
+    record({ kind: "rank-pending", goal: "hello from the test", mode: "choice", candidateCount: 4, total: 4 });
     const res = await fetch(`${url()}snapshot`);
     assert.equal(res.status, 200);
-    const body = (await res.json()) as { events: Array<{ message?: string }> };
+    const body = (await res.json()) as { events: Array<{ goal?: string }> };
     assert.equal(body.events.length, 1);
-    assert.equal(body.events[0]?.message, "hello from the test");
+    assert.equal(body.events[0]?.goal, "hello from the test");
   });
 
   it("404s an unknown path", async () => {

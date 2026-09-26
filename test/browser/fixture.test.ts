@@ -16,7 +16,16 @@ import assert from "node:assert/strict";
 import { pathToFileURL } from "node:url";
 import { release, getPage } from "../../src/browser.js";
 import { ensureInjected, probeInjection } from "../../src/inject.js";
-import { snapshot, writeText, clickDeep, selectOption, inspect, readValue } from "../../src/page.js";
+import {
+  clickDeep,
+  inspect,
+  isFresh,
+  probeRef,
+  readValue,
+  selectOption,
+  snapshot,
+  writeText,
+} from "../../src/page.js";
 import { repoPath } from "../support/paths.js";
 
 // Resolved from the repository root, not from this file's location: the compiled tests
@@ -248,6 +257,45 @@ describe("verified writes over the injected layer", () => {
     const result = await clickDeep(page, { css: "#light-button" });
     assert.equal(result.ok, true, `click failed: ${result.reason}`);
     assert.equal(typeof result.urlChanged, "boolean");
+  });
+});
+
+describe("stale refs", () => {
+  before(async () => {
+    const page = await getPage();
+    await page.goto(fixtureUrl, { waitUntil: "load" });
+    await page.waitForTimeout(500);
+    await ensureInjected(page);
+  });
+
+  after(async () => {
+    await release();
+  });
+
+  it("reports a ref whose node was removed from the document", async () => {
+    // isFresh collapses "gone", "not rendered" and "covered" into one boolean, so
+    // probeRef exists to say which. This is the case an agent can actually recover
+    // from by re-snapshotting, and the message has to make that obvious.
+    const page = await getPage();
+    const reason = await probeRef(page, 9999);
+    assert.match(reason, /no longer in the document/);
+  });
+
+  it("reports a ref that is scrolled out of view", async () => {
+    const page = await getPage();
+    const snap = await snapshot(page, { interactive: true, includeOffscreen: true });
+    const offscreen = snap.elements.find((e) => e.name === "OFFSCREEN_BUTTON");
+    assert.ok(offscreen, "the fixture should have an offscreen control");
+    const reason = await probeRef(page, offscreen.ref);
+    assert.match(reason, /scrolled out of view/);
+  });
+
+  it("accepts a ref that is still good", async () => {
+    const page = await getPage();
+    const snap = await snapshot(page, { interactive: true });
+    const good = snap.elements.find((e) => e.name === "LIGHT_INPUT");
+    assert.ok(good);
+    assert.equal(await isFresh(page, good.ref), true);
   });
 });
 

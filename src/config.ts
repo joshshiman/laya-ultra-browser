@@ -163,8 +163,3 @@ export const config = {
 export function assetPath(...parts: string[]): string {
   return join(distDir, ...parts);
 }
-
-/** True when a path exists; used for optional-asset checks. */
-export function assetExists(...parts: string[]): boolean {
-  return existsSync(assetPath(...parts));
-}

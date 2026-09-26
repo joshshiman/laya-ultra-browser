@@ -85,15 +85,7 @@ export type ActionEvent = {
   elapsedMs: number;
 };
 
-export type NoteEvent = {
-  kind: "note";
-  id: number;
-  at: number;
-  level: "info" | "warn";
-  message: string;
-};
-
-export type VisualizerEvent = RankEvent | RankPendingEvent | ActionEvent | NoteEvent;
+export type VisualizerEvent = RankEvent | RankPendingEvent | ActionEvent;
 
 /**
  * What callers pass to record(): a VisualizerEvent minus the fields the buffer owns.

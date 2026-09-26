@@ -8,6 +8,8 @@
  * subscriber.
  */
 import { after, before, describe, it } from "node:test";
+import { execFileSync } from "node:child_process";
+import { repoPath } from "../support/paths.js";
 import assert from "node:assert/strict";
 import { layaStatus, rank, shutdown as shutdownLaya, warmup } from "../../src/laya/client.js";
 import { clear, record, snapshot, subscribe, type RankEvent } from "../../src/visualizer/events.js";
@@ -131,6 +133,48 @@ describe("laya bridge (requires the optional model)", () => {
     assert.equal(seen.length, 1, "the subscriber should have received exactly one event");
     assert.equal(seen[0]?.considered.length, result.ranked.length);
     assert.ok(snapshot().some((e) => e.kind === "rank"));
+  });
+
+  it("works in noul mode, one question per candidate", async (t) => {
+    // LAYA_MODE=noul is a documented option with its own code path in the bridge, and
+    // it is the only way past the option-head ceiling. Config is frozen at import, so
+    // this runs in a child process: setting process.env in-process would leave the
+    // mode as choice and the test would pass without ever touching noul.
+    if (!available) return t.skip("laya_mlx is not available");
+
+    const script = `
+      const { rank, warmup, shutdown } = await import(${JSON.stringify(repoPath("dist/laya/client.js"))});
+      await warmup();
+      const candidates = ${JSON.stringify(CANDIDATES)};
+      const result = await rank("the email address field", candidates);
+      await shutdown();
+      process.stdout.write(JSON.stringify(result));
+    `;
+    const out = execFileSync(process.execPath, ["--input-type=module", "-e", script], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        LAYA_MODE: "noul",
+        LAYA_PYTHON: process.env.LAYA_PYTHON ?? "",
+      },
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: 300_000,
+    });
+    const result = JSON.parse(out) as { mode: string; ranked: Array<{ ref: number; score: number }> };
+
+    assert.equal(result.mode, "noul", "the bridge should have used noul mode");
+    assert.ok(result.ranked.length > 0, "expected a non-empty noul ranking");
+    for (const row of result.ranked) {
+      assert.ok(Number.isFinite(row.score), `non-finite score for ref ${row.ref}`);
+      assert.ok(
+        CANDIDATES.some((c) => c.ref === row.ref),
+        `noul returned an unknown ref ${row.ref}`,
+      );
+    }
+    // noul scores a yes/no judgement, so they are not a distribution over options and
+    // need not sum to one. Asserting they would be a mistake about what noul is.
+    const sum = result.ranked.reduce((acc, r) => acc + r.score, 0);
+    assert.ok(sum > 0, "noul scores should be positive for at least some candidates");
   });
 
   it("serves the real ranking on the dashboard endpoint", async (t) => {

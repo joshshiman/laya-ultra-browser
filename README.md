@@ -125,17 +125,44 @@ Every action tool accepts any of these, in priority order:
 - `goal` — plain language, e.g. `"the email address field"`. Ranked locally when the
   optional model is installed, matched deterministically otherwise.
 
+### Refs go stale, and you will be told why
+
+A ref identifies a node in one snapshot. Navigate, or let the framework re-render, and
+it no longer points at what it did. Rather than let that surface as a confusing
+mismatch, every action re-checks the ref first and says which of the three things went
+wrong:
+
+```
+Error: ref 4 is stale: it is scrolled out of view.
+
+Hint: Refs stay valid until the page navigates or the DOM is replaced.
+Call browser_snapshot again and use a ref from the new list, or pass a goal instead.
+```
+
+The reasons are "the node is no longer in the document", "it is hidden, collapsed or
+has zero size", "it is scrolled out of view", and "something is covering it, so a click
+would land on the wrong element". The last one matters most: a covered control looks
+perfectly present in a snapshot, and clicking it would hit whatever is on top.
+
+### Seeing what the ranker thought
+
 `browser_find` shows the ranking and the runners-up before you commit, which is the
 cheapest way to find out whether the model understood you:
 
 ```
 goal: the email address field
 selected by: laya (score 0.9986)
+WARNING: Laya and the deterministic matcher disagree about the target. The model's
+pick was used; pass an explicit ref if you already have one.
 
 ref=7   <-- selected
 ref=2       textbox  "Email address"
 ref=9       textbox  "Confirm email address"
 ```
+
+That warning is the point. The deterministic matcher runs on every goal regardless, so
+its answer is always available to compare against, and a mismatch means the model's
+pick is worth checking before you act on it.
 
 ### Always check `verified`
 
