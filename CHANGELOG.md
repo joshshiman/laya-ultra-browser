@@ -65,7 +65,17 @@ for a ref moved inside the action's own evaluate instead of being a separate cal
 `test/browser/round-trips.test.ts` so it cannot silently regress, and
 `npm run round-trips` reports it.
 
-**Tests: 164.** The shadow DOM conformance fixture (72 assertions) now runs in real
+**Process guards.** An unhandled promise rejection no longer takes the server down. It
+is logged and the process carries on, because a detached promise rejecting after its
+caller moved on should not cost the client its transport. An uncaught exception still
+exits, since process state is unknown after one.
+
+**Verified without the model.** The suite now drives a real server with the ranker
+unavailable and asserts that navigation, snapshotting, shadow-root writes, verification
+and goal resolution all still work, and that a successful write is not annotated with
+model trouble. That is the path for anyone on Linux, on Intel, or who skipped the setup.
+
+**Tests: 175.** The shadow DOM conformance fixture (72 assertions) now runs in real
 Chromium through the same injection path a user hits. Plus a pure-function unit suite, a
 suite that drives `dist/server.js` over the MCP protocol, one that exercises the real
 Laya bridge on a GPU runner, and one that loads the dashboard in a browser and checks

@@ -16,6 +16,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { getPage, installSignalHandlers, isRunning, navigate, shutdown, withTimeout } from "./browser.js";
+import { installProcessGuards } from "./guards.js";
 import { config } from "./config.js";
 import { probeInjection } from "./inject.js";
 import { cachedInfo, layaStatus, shutdown as shutdownLaya, warmup } from "./laya/client.js";
@@ -694,6 +695,9 @@ server.registerTool(
 // ---------------------------------------------------------------------------
 
 async function main(): Promise<void> {
+  // Before anything that can start a promise, so a stray rejection is logged rather
+  // than taking the transport down.
+  installProcessGuards();
   installSignalHandlers();
 
   // Started before the transport so the URL is available to the first status call.
