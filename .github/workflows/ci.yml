@@ -97,9 +97,15 @@ jobs:
       - name: Check the packed contents
         run: |
           npm run build
-          npm pack --dry-run --json --ignore-scripts > pack.json
+          npm pack --dry-run --json --ignore-scripts > pack.raw
+          # Lifecycle output can land in the stream ahead of the JSON on some npm
+          # versions even with --ignore-scripts, so parse from the first brace rather
+          # than assuming the file is JSON from byte zero.
           node -e '
-            const files = require("./pack.json")[0].files.map(f => f.path);
+            const raw = require("fs").readFileSync("pack.raw", "utf8");
+            const at = raw.indexOf("[");
+            if (at < 0) { console.error("npm pack produced no JSON:\n" + raw); process.exit(1); }
+            const files = JSON.parse(raw.slice(at))[0].files.map(f => f.path);
             const required = [
               "package.json",
               "README.md",
