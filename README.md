@@ -39,6 +39,25 @@ Three failure modes, all observed on real single-page applications:
 This server fixes (2) with verification, covers (3) with an occlusion check, and
 handles (1) explicitly rather than pretending selectors work.
 
+## Platform support
+
+The browser tools work anywhere Playwright's Chromium runs. The local model does not,
+and pretending otherwise would waste your afternoon.
+
+| | Browser tools | Local Laya ranking |
+|---|---|---|
+| macOS, Apple Silicon | yes | yes |
+| macOS, Intel | yes | no |
+| Linux | yes | no |
+| Windows | yes | no |
+
+Laya runs through [MLX](https://github.com/ml-explore/mlx), which is Apple-GPU only.
+On other platforms every tool still works; goals are matched by accessible name and
+role instead, and `browser_status` says so rather than failing quietly.
+
+If you only need the browser tools, ignore the Laya section below entirely. There is
+nothing else to install.
+
 ## Install
 
 Requires **Node 22 or newer**.
@@ -58,6 +77,17 @@ Add it to your MCP client. That is the whole installation:
 
 The first run downloads a Chromium build (~95 MB) and caches it. Later runs start
 immediately.
+
+**On Linux** you may also need Chromium's shared libraries, which is what
+`npx playwright install --with-deps chromium` installs. If the server starts and then
+reports a missing `.so` file, run that.
+
+**Behind a proxy**, set `HTTPS_PROXY` in the config block; Playwright and the model
+download both honour it.
+
+**If the install produced no `dist/`** and the server cannot start, see
+[Troubleshooting](#troubleshooting). npm sometimes suppresses a git dependency's
+lifecycle scripts, and the TypeScript then never gets compiled.
 
 To pin a version, add a tag: `github:joshshiman/laya-ultra-browser#v0.1.0`.
 
@@ -284,6 +314,9 @@ Stated plainly, because a tool that hides these is worse than one without the fe
 - **A click is not an outcome.** The server reports weak signals, not proof.
 - **The browser is Chromium.** Driven through Playwright.
 - **Single page, single browser.** One tab at a time. Tab management is not built.
+- **Refs are only valid until the DOM changes.** Every action re-checks and says why
+  if not, but a long task across a re-rendering page will keep re-snapshotting.
+- **The local ranker needs Apple Silicon.** See [Platform support](#platform-support).
 
 ## Troubleshooting
 
