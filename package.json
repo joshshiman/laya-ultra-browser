@@ -39,7 +39,8 @@
     "setup:laya": "bash scripts/setup-laya.sh",
     "laya:check": "bash scripts/setup-laya.sh --check",
     "screenshot": "npm run build && node scripts/screenshot-dashboard.mjs",
-    "prepack": "npm run build"
+    "prepack": "npm run build",
+    "prepare": "npm run build"
   },
   "keywords": [
     "mcp",
