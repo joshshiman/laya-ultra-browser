@@ -1,5 +1,6 @@
 node_modules/
 dist/
+dist-test/
 *.tsbuildinfo
 
 # secrets and local config
@@ -17,8 +18,9 @@ screenshots/
 # browser profiles, never commit these, they hold session cookies
 profiles/
 user-data-dir/
+.test-profile*/
 
-# spike output
+# generated injection bundles, rebuilt by `npm run build:inject`
 scripts/out/
 
 .DS_Store

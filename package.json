@@ -1,27 +1,67 @@
 {
   "name": "laya-ultra-browser",
-  "version": "0.0.1",
-  "private": true,
-  "description": "A local browser MCP server with shadow-DOM-piercing snapshots, drop-in compatible with agent-browser, optionally backed by a local Laya decision model.",
+  "version": "0.1.0",
+  "description": "MCP browser server with verified shadow-DOM-piercing writes and optional local Laya ranking. Every write reads back and confirms, so a silent no-op is reported as a failure instead of success.",
   "license": "MIT",
   "type": "module",
   "engines": {
     "node": ">=22"
   },
   "bin": {
-    "laya-ultra-browser": "./dist/server.js"
+    "laya-ultra-browser": "dist/server.js"
   },
+  "main": "dist/server.js",
+  "exports": {
+    ".": "./dist/server.js",
+    "./snapshot/walker": "./dist/snapshot/walker.js",
+    "./snapshot/actions": "./dist/snapshot/actions.js"
+  },
+  "files": [
+    "dist",
+    "src/snapshot",
+    "src/laya/bridge.py",
+    "scripts/setup-laya.sh",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && node scripts/copy-assets.mjs",
+    "build:test": "tsc -p tsconfig.test.json",
+    "build:inject": "node scripts/build.mjs",
+    "clean": "rm -rf dist dist-test",
     "dev": "tsc -p tsconfig.json --watch",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "node --test test/",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json --noEmit",
+    "pretest": "npm run build && npm run build:inject && npm run build:test",
+    "test": "node --test --test-concurrency=1 dist-test/test/",
+    "test:unit": "npm run build:test && node --test --test-concurrency=1 dist-test/test/unit/",
+    "test:browser": "npm run build && npm run build:test && node --test --test-concurrency=1 dist-test/test/browser/",
     "check": "npm run typecheck && npm test",
-    "build:inject": "node scripts/build.mjs"
+    "setup:laya": "bash scripts/setup-laya.sh",
+    "laya:check": "bash scripts/setup-laya.sh --check",
+    "screenshot": "npm run build && node scripts/screenshot-dashboard.mjs",
+    "prepack": "npm run build"
+  },
+  "keywords": [
+    "mcp",
+    "browser",
+    "automation",
+    "shadow-dom",
+    "laya",
+    "accessibility",
+    "llm"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/joshshiman/laya-ultra-browser.git"
+  },
+  "homepage": "https://github.com/joshshiman/laya-ultra-browser#readme",
+  "bugs": {
+    "url": "https://github.com/joshshiman/laya-ultra-browser/issues"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.0.0",
-    "playwright-core": "^1.48.0"
+    "@modelcontextprotocol/sdk": "^1.30.1",
+    "playwright": "^1.56.0",
+    "zod": "^3.25.0 || ^4.0.0"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

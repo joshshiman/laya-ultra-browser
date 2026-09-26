@@ -288,6 +288,80 @@
   }
 
   // ---------------------------------------------------------------------------
+  // Text-entry eligibility
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Input types that hold text a user typed. Everything else -- button, submit,
+   * checkbox, radio, file, image, hidden, range, color, reset -- is a control you
+   * operate, not a field you fill in.
+   */
+  var TEXT_INPUT_TYPES = {
+    text: 1, search: 1, email: 1, url: 1, tel: 1, password: 1, number: 1,
+    date: 1, "datetime-local": 1, month: 1, week: 1, time: 1
+  };
+
+  function isTextEntry(el) {
+    if (!el) return false;
+    if (el.isContentEditable) return true;
+    var tag = el.tagName;
+    if (tag === "TEXTAREA" || tag === "SELECT") return true;
+    if (tag === "INPUT") {
+      var t = (el.getAttribute("type") || "text").toLowerCase();
+      return !!TEXT_INPUT_TYPES[t];
+    }
+    return false;
+  }
+
+  /**
+   * Returns a reason string when the element definitely cannot accept a text write,
+   * else null.
+   *
+   * Custom elements are deliberately let through. A wrapper like <my-text-field> is
+   * neither a field nor a definitive non-field: writing to its host is exactly the
+   * host-echo case, and the descend-and-compare logic further down gives the honest
+   * answer about what happened. Refusing it here would replace a precise diagnosis
+   * with a vague one.
+   *
+   * A <select> is treated as a field so selectOption still handles it with its own,
+   * more specific error message.
+   */
+  function textEntryProblem(el) {
+    if (!el) return "no element resolved";
+    if (isTextEntry(el)) return null;
+    if (el.tagName.indexOf("-") > 0) return null;
+    var tag = el.tagName.toLowerCase();
+    var type = (el.getAttribute && el.getAttribute("type")) || "";
+    var what = type ? "<" + tag + " type=" + type + ">" : "<" + tag + ">";
+    return "resolved to " + what + ", which does not accept a text value. "
+      + "Writing to it would set a meaningless property that still reads back, so the write "
+      + "would report success while changing nothing the user can see. "
+      + (tag === "select"
+        ? "Use the select_option action for a dropdown."
+        : "Use the click action for a button or link, or target a text field explicitly.");
+  }
+
+  /** Controls that do accept text, so a refused write is actionable. */
+  function textEntryCandidates() {
+    var out = [];
+    walkDeep(function (el) {
+      if (out.length >= 10) return false;
+      if (!isTextEntry(el)) return;
+      if (el.disabled || el.readOnly) return;
+      var r = null;
+      try { r = el.getBoundingClientRect(); } catch (e) { /* ignore */ }
+      if (!r || (r.width <= 0 && r.height <= 0)) return;
+      out.push({
+        tag: el.tagName.toLowerCase(),
+        id: el.id || "",
+        name: accName(el) || (el.getAttribute("placeholder") || ""),
+        value: readValue(el)
+      });
+    });
+    return out;
+  }
+
+  // ---------------------------------------------------------------------------
   // Public actions, all verified
   // ---------------------------------------------------------------------------
 
@@ -311,6 +385,26 @@
 
     if (el.disabled) return { ok: false, stage: "precheck", reason: "element is disabled", element: describe(el) };
     if (el.readOnly) return { ok: false, stage: "precheck", reason: "element is readOnly", element: describe(el) };
+
+    // Refuse to write text into something that is not a text-entry control.
+    //
+    // This is the one case read-back verification cannot catch. Assigning `.value` to
+    // a <button> creates a plain expando property: the write genuinely persists, so
+    // reading it back matches and verification passes. The result is a cheerful
+    // "verified" for a write that went into the wrong control entirely. Hit for real
+    // when a probabilistic ranker picked a button for a field goal, so the check lives
+    // here rather than trusting the caller to have resolved well.
+    var entryProblem = textEntryProblem(el);
+    if (entryProblem) {
+      return {
+        ok: false,
+        stage: "precheck",
+        reason: entryProblem,
+        element: describe(el),
+        // Offer the alternatives, because the caller almost always meant one of these.
+        textEntryCandidates: textEntryCandidates()
+      };
+    }
 
     if (opts.scroll !== false) {
       try { el.scrollIntoView({ block: "center", inline: "nearest" }); } catch (e) { /* ignore */ }

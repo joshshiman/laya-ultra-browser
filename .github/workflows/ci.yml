@@ -1,0 +1,136 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: typecheck and test
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # The in-page layer is plain ES5-compatible JS on purpose, so the suite is
+        # meaningful on more than one platform. macOS is where the Laya path can run.
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      # The browser tests drive a real Chromium, so the binary has to be present
+      # before the suite runs. Caching it saves ~90s per job.
+      - name: Cache the Playwright browser
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      # Covers the in-page layer against the conformance fixture, the deterministic
+      # matcher, config validation, the visualizer, and the MCP server over stdio.
+      # Laya tests self-skip when no interpreter can import laya_mlx.
+      - name: Test
+        run: npm test
+
+  laya:
+    name: laya bridge (macos)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+      - run: npm run build
+      - run: npm run build:test
+
+      # uv resolves a managed interpreter, so this does not depend on the runner's
+      # Python. MLX needs Apple Silicon, which macos-latest provides.
+      - name: Set up the Laya environment
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Create the Laya environment
+        run: bash scripts/setup-laya.sh
+
+      # Downloads the checkpoint on first run, roughly 2GB.
+      - name: Test the Laya bridge
+        run: node --test --test-concurrency=1 --test-timeout=600000 dist-test/test/browser/laya.test.js
+
+  package:
+    name: package contents
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+
+      # A published tarball that is missing dist/, the in-page scripts, or the Python
+      # bridge would install cleanly and then fail on first use. Verify the manifest.
+      # --ignore-scripts because prepack rebuilds, and that output would land in the
+      # JSON stream and make it unparseable.
+      - name: Check the packed contents
+        run: |
+          npm run build
+          npm pack --dry-run --json --ignore-scripts > pack.json
+          node -e '
+            const files = require("./pack.json")[0].files.map(f => f.path);
+            const required = [
+              "package.json",
+              "README.md",
+              "LICENSE",
+              "dist/server.js",
+              "dist/snapshot/walker.js",
+              "dist/snapshot/actions.js",
+              "dist/laya/bridge.py",
+              "scripts/setup-laya.sh",
+            ];
+            const missing = required.filter(f => !files.includes(f));
+            if (missing.length) {
+              console.error("missing from the package:\n  " + missing.join("\n  "));
+              process.exit(1);
+            }
+            if (files.some(f => f.endsWith(".ts") && !f.endsWith(".d.ts"))) {
+              console.error("the package ships raw TypeScript sources");
+              process.exit(1);
+            }
+            console.log("package contents OK: " + files.length + " files");
+          '
+
+      # Proves the bin entry actually starts, which a manifest check cannot show.
+      - name: Check the binary runs
+        run: |
+          set -euo pipefail
+          npm link
+          laya-ultra-browser --help >/dev/null 2>&1 || true
+          # --help is not a flag this server implements; it speaks MCP on stdio. Start
+          # it, confirm it announces readiness on stderr, then close stdin.
+          printf '' | timeout 25 laya-ultra-browser 2>server.log || true
+          grep -q "ready on stdio" server.log || {
+            echo "server did not report readiness"; cat server.log; exit 1;
+          }
