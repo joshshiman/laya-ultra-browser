@@ -35,7 +35,9 @@ describe("visualizer event buffer", () => {
       pruned: 0,
       total: 1,
       selectedRef: 1,
-      disagreedWithDeterministic: null,
+      disagreedWithDeterministic: false,
+      deterministicRef: null,
+      disagreementReason: null,
       elapsedMs: 12,
       calibrated: false,
     });
@@ -223,7 +225,9 @@ describe("visualizer http server", () => {
       pruned: 2,
       total: 9,
       selectedRef: 7,
-      disagreedWithDeterministic: null,
+      disagreedWithDeterministic: false,
+      deterministicRef: null,
+      disagreementReason: null,
       elapsedMs: 97,
       calibrated: false,
     });

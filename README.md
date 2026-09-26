@@ -186,10 +186,14 @@ Every option is an environment variable, set in your MCP client config.
 | `LAYA_MODEL` | `convaiinnovations/laya` | Checkpoint id. |
 | `LAYA_CHECKPOINT` | *(unset)* | Checkpoint subfolder, e.g. `typed-decisions`. |
 | `LAYA_MODE` | `choice` | `choice` for one forward pass, `noul` for a question per candidate. |
-| `LAYA_MAX_OPTIONS` | `12` | Candidates per ranking call. Capped at 20 by the model. |
+| `LAYA_MAX_OPTIONS` | `12` | Candidates per `choice` ranking call. Capped at 20 by the model. |
+| `LAYA_MAX_CANDIDATES` | `60` | Candidates per `noul` ranking call. `noul` is one forward pass each, so this trades latency for reach. |
+| `LAYA_STARTUP_TIMEOUT_MS` | `180000` | How long to wait for the model to load. Raise it on a first run that is still downloading weights. |
+| `LAYA_REQUEST_TIMEOUT_MS` | `30000` | Per-ranking-call ceiling once the bridge is warm. |
 | `LAYA_VISUALIZER` | `false` | Serve the live dashboard. See below. |
 | `LAYA_VISUALIZER_PORT` | `7317` | Port for the dashboard. Falls back to any free port. |
 | `LAYA_VISUALIZER_HOST` | `127.0.0.1` | Dashboard bind address. |
+| `LAYA_VISUALIZER_HISTORY` | `200` | Ranking and action events retained for the dashboard. |
 
 ## Live visualizer
 

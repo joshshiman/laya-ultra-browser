@@ -60,18 +60,22 @@ async function launchContext(): Promise<BrowserContext> {
     args.push("--disable-renderer-backgrounding");
   }
 
-  if (config.executablePath) {
-    return chromium.launchPersistentContext(config.profileDir, {
-      headless: !config.headed,
-      executablePath: config.executablePath,
-      args,
-    });
-  }
-
-  return chromium.launchPersistentContext(config.profileDir, {
+  const shared = {
     headless: !config.headed,
     args,
-  });
+    ...(config.executablePath ? { executablePath: config.executablePath } : {}),
+  };
+
+  if (!config.persistentProfile) {
+    // Ephemeral: a throwaway profile, discarded on exit. Leaves nothing on disk, but
+    // every session starts signed out, so any login has to be redone. launch() returns
+    // a Browser, so take a context from it to keep one shape for the caller.
+    const launched = await chromium.launch(shared);
+    return launched.newContext();
+  }
+
+  // Persistent: the profile directory is reused between runs, so a login survives.
+  return chromium.launchPersistentContext(config.profileDir, shared);
 }
 
 async function ensureBrowser(): Promise<BrowserContext> {

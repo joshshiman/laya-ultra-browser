@@ -103,6 +103,13 @@ export const DASHBOARD_HTML = /* html */ `<!DOCTYPE html>
   .fill.flat { background: linear-gradient(90deg, #6e7681, #8b949e); }
 
   .empty { color: var(--muted); padding: 28px 14px; text-align: center; }
+  .disagree {
+    background: rgba(210,153,34,.10); border-bottom: 1px solid rgba(210,153,34,.35);
+    color: #e3b341; padding: 9px 14px; font-size: 12px;
+  }
+  .disagree b { color: #f0c674; }
+  .card.pending { border-style: dashed; opacity: .75; }
+  .scanning { padding: 12px 14px; color: var(--muted); font-size: 12px; }
   .act { font-size: 12px; }
   .act.ok { color: var(--good); }
   .act.no { color: var(--bad); }
@@ -159,7 +166,37 @@ export const DASHBOARD_HTML = /* html */ `<!DOCTYPE html>
     return Math.max.apply(null, xs) - Math.min.apply(null, xs);
   }
 
+  function renderRankPending(ev) {
+    // Shown the moment a ranking starts, so a slow or cold call reads as in flight
+    // rather than looking like nothing happened.
+    var card = document.createElement("div");
+    card.className = "card pending";
+    // Keyed by goal so the matching result can retract it. Without this the in-flight
+    // card stays in the feed forever and claims work is still happening.
+    card.dataset.goal = ev.goal;
+    card.innerHTML =
+      '<div class="head">' +
+        '<span class="goal">' + esc(ev.goal) + "</span>" +
+        '<span class="tag">' + esc(ev.mode) + "</span>" +
+        '<span class="tag">ranking ' + ev.candidateCount + " candidates</span>" +
+        '<span class="spacer"></span>' +
+        '<span class="when">in flight</span>' +
+      "</div>" +
+      '<div class="scanning"><span class="dot live"></span>scanning candidates</div>';
+    feed.insertBefore(card, feed.firstChild);
+    while (feed.children.length > MAX_CARDS) feed.removeChild(feed.lastChild);
+  }
+
+  /** Retracts the in-flight card for a goal, if one is still showing. */
+  function clearPending(goal) {
+    var pending = feed.querySelectorAll(".card.pending");
+    for (var i = 0; i < pending.length; i++) {
+      if (pending[i].dataset.goal === goal) pending[i].remove();
+    }
+  }
+
   function renderRank(ev) {
+    clearPending(ev.goal);
     nrank++;
     nrankEl.textContent = nrank;
 
@@ -173,10 +210,20 @@ export const DASHBOARD_HTML = /* html */ `<!DOCTYPE html>
       '<span class="tag">' + esc(ev.mode) + "</span>" +
       '<span class="tag">' + list.length + " of " + ev.total + " candidates</span>" +
       (ev.pruned ? '<span class="tag">' + ev.pruned + " pruned</span>" : "") +
-      (ev.disagreedWithDeterministic ? '<span class="tag bad">model and fallback disagree</span>' : "") +
+      (ev.disagreedWithDeterministic
+        ? '<span class="tag bad">model and fallback disagree</span>'
+        : (ev.deterministicRef != null
+            ? '<span class="tag good">model agrees with name matching</span>'
+            : "")) +
       '<span class="spacer"></span>' +
       '<span class="when">' + ev.elapsedMs + " ms &middot; " + ago(ev.at) + "</span>" +
       "</div>";
+
+    // The disagreement is the most actionable thing on the card, so it gets its own
+    // line naming both picks rather than hiding in a tag.
+    var warn = ev.disagreementReason
+      ? '<div class="disagree"><b>Disagreement.</b> ' + esc(ev.disagreementReason) + "</div>"
+      : "";
 
     var body;
     if (ev.error) {
@@ -200,7 +247,7 @@ export const DASHBOARD_HTML = /* html */ `<!DOCTYPE html>
       body = "<table><thead><tr><th></th><th>ref</th><th>candidate</th>" +
         "<th>score</th><th></th></tr></thead><tbody>" + rows + "</tbody></table>";
     }
-    card.innerHTML = head + body;
+    card.innerHTML = head + warn + body;
     feed.insertBefore(card, feed.firstChild);
 
     // Animate after insertion so the transition has a start value to move from.
@@ -260,6 +307,7 @@ export const DASHBOARD_HTML = /* html */ `<!DOCTYPE html>
     var ev;
     try { ev = JSON.parse(m.data); } catch (e) { return; }
     if (ev.kind === "rank") renderRank(ev);
+    else if (ev.kind === "rank-pending") renderRankPending(ev);
     else if (ev.kind === "action") renderAction(ev);
   };
 

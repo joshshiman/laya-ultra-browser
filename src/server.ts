@@ -143,13 +143,16 @@ const snapshotShape = {
     .boolean()
     .default(true)
     .describe("Only list controls a user could operate. Turn off to include static text."),
+  // No zod default on the two flags below: their default comes from
+  // LAYA_INCLUDE_HIDDEN, so a server-wide setting actually takes effect. A zod default
+  // would always win and the variable would do nothing.
   includeOffscreen: z
     .boolean()
-    .default(false)
+    .optional()
     .describe("Include controls scrolled out of view. The accessibility tree lists them as if visible."),
   includeCovered: z
     .boolean()
-    .default(false)
+    .optional()
     .describe("Include controls hidden behind an overlay or another element."),
   selector: z
     .string()
@@ -229,8 +232,8 @@ server.registerTool(
       const snap = await snapshot(page, {
         interactive: args.interactive,
         includeUrls: true,
-        includeOffscreen: args.includeOffscreen,
-        includeCovered: args.includeCovered,
+        includeOffscreen: args.includeOffscreen ?? config.includeHidden,
+        includeCovered: args.includeCovered ?? config.includeHidden,
         withPaths: args.withPaths,
         maxElements: args.maxElements ?? config.maxSnapshotElements,
         ...(args.selector ? { selector: args.selector } : {}),
@@ -271,10 +274,17 @@ server.registerTool(
 
       const rows: string[] = [];
       rows.push(`goal: ${goal}`);
-      rows.push(`selected by: ${proposal.via}${proposal.score !== undefined ? ` (score ${proposal.score.toFixed(4)})` : ""}`);
+      rows.push(
+        `selected by: ${proposal.via}${proposal.score !== undefined ? ` (score ${proposal.score.toFixed(4)})` : ""}`,
+      );
       if (proposal.ambiguous) {
         rows.push("AMBIGUOUS: the top candidates scored too closely to separate. Pass an explicit ref.");
       }
+      // A disagreement between the model and name matching is the single most useful
+      // signal here, so it leads rather than being buried in the notes.
+      const disagreement = proposal.notes.find((n) => n.includes("disagree"));
+      if (disagreement) rows.push(`WARNING: ${disagreement}`);
+
       rows.push("");
       rows.push(`ref=${proposal.ref}  <-- selected`);
       for (const alt of proposal.alternatives.slice(0, limit - 1)) {

@@ -34,14 +34,41 @@ export type RankEvent = {
   pruned: number;
   /** How many interactive controls the snapshot produced in total. */
   total: number;
-  /** Which ref was ultimately acted on, when known. */
+  /** Which ref the model chose. */
   selectedRef: number | null;
-  /** True when the model and the deterministic fallback chose different winners. */
-  disagreedWithDeterministic: boolean | null;
+  /**
+   * Which ref the deterministic matcher would have chosen for the same goal.
+   *
+   * Computed on every call even though only the model result is acted on. It costs one
+   * extra sort over candidates already in memory, and it is the only way to see that
+   * the two disagree rather than assuming they agree.
+   */
+  deterministicRef: number | null;
+  /**
+   * True when the model and the deterministic matcher chose different elements, or when
+   * the model gave every candidate the same score and so effectively chose nothing.
+   * Surfaced prominently in the dashboard: this is the signal that a probabilistic pick
+   * is worth distrusting on this page.
+   */
+  disagreedWithDeterministic: boolean;
+  /** Why the flag is set, for display. */
+  disagreementReason: string | null;
   elapsedMs: number;
   /** Always false today, and surfaced in the UI so nobody reads these as probabilities. */
   calibrated: false;
   error?: string;
+};
+
+/** Emitted the moment a ranking starts, so the dashboard can show work in flight. */
+export type RankPendingEvent = {
+  kind: "rank-pending";
+  id: number;
+  at: number;
+  goal: string;
+  mode: "choice" | "noul";
+  /** Candidates about to be sent, before any score exists. */
+  candidateCount: number;
+  total: number;
 };
 
 export type ActionEvent = {
@@ -66,7 +93,7 @@ export type NoteEvent = {
   message: string;
 };
 
-export type VisualizerEvent = RankEvent | ActionEvent | NoteEvent;
+export type VisualizerEvent = RankEvent | RankPendingEvent | ActionEvent | NoteEvent;
 
 /**
  * What callers pass to record(): a VisualizerEvent minus the fields the buffer owns.

@@ -43,6 +43,50 @@ export type Proposal = {
 /** Below this margin between first and second place, the pick is treated as a toss-up. */
 const AMBIGUITY_MARGIN = 0.08;
 
+/**
+ * Below this total spread across the whole ranking, the model has not separated the
+ * candidates at all and its "winner" is an artifact of tokenisation order.
+ *
+ * Set from the measured behaviour of the default checkpoint, which returns near
+ * identical values for every candidate on a page of unrelated controls. Without this
+ * threshold a flat distribution would be reported as a confident first place.
+ */
+const FLAT_SPREAD = 0.02;
+
+/** Range of the returned scores. Zero means the model expressed no preference. */
+export function spread(scores: Array<{ score: number }>): number {
+  if (scores.length === 0) return 0;
+  let min = Infinity;
+  let max = -Infinity;
+  for (const s of scores) {
+    if (s.score < min) min = s.score;
+    if (s.score > max) max = s.score;
+  }
+  return max - min;
+}
+
+export type DeterministicPick = { ref: number; score: number; name: string; role: string };
+
+/** The element name and role matching would choose, or null when nothing scored. */
+export function bestDeterministic(
+  goal: string,
+  elements: readonly SnapshotElement[],
+): DeterministicPick | null {
+  if (elements.length === 0) return null;
+  let best: { el: SnapshotElement; score: number } | null = null;
+  for (const el of elements) {
+    const score = deterministicScore(goal, el);
+    if (!best || score > best.score) best = { el, score };
+  }
+  if (!best) return null;
+  return {
+    ref: best.el.ref,
+    score: best.score,
+    name: best.el.name || `(${best.el.tag})`,
+    role: best.el.role,
+  };
+}
+
 function toTarget(ref: number): Target {
   return { ref };
 }
@@ -130,8 +174,11 @@ export async function resolveTarget(input: ResolveInput): Promise<Proposal> {
   const snap = await snapshot(page, {
     interactive: true,
     includeUrls: true,
-    includeOffscreen: false,
-    includeCovered: false,
+    // Honour LAYA_INCLUDE_HIDDEN here too. If it only applied to browser_snapshot, a
+    // user who turned it on would still never see those controls in the shortlist, so
+    // Laya could never select one and the setting would appear to do nothing.
+    includeOffscreen: config.includeHidden,
+    includeCovered: config.includeHidden,
     ...(selector ? { selector } : {}),
   });
 
@@ -146,6 +193,11 @@ export async function resolveTarget(input: ResolveInput): Promise<Proposal> {
 
   const notes: string[] = [];
 
+  // The deterministic answer is computed alongside the model's, not as a fallback
+  // after it. It is what the caller would have got without the model, so recording both
+  // is the only way to see whether the model earned its say.
+  const deterministicBest = bestDeterministic(goal, snap.elements);
+
   if (!input.deterministic) {
     const started = Date.now();
     try {
@@ -157,6 +209,15 @@ export async function resolveTarget(input: ResolveInput): Promise<Proposal> {
         disabled: el.disabled,
         visibility: el.visibility,
       }));
+
+      record({
+        kind: "rank-pending",
+        goal,
+        mode: config.laya.mode,
+        candidateCount: candidates.length,
+        total: snap.elements.length,
+      });
+
       const result = await rank(goal, candidates);
       const top = result.ranked[0];
       if (top) {
@@ -165,9 +226,26 @@ export async function resolveTarget(input: ResolveInput): Promise<Proposal> {
         const ambiguous =
           second !== undefined && Math.abs(top.score - second.score) < AMBIGUITY_MARGIN;
 
+        const flat = spread(result.ranked) < FLAT_SPREAD;
+        const differs = deterministicBest !== null && deterministicBest.ref !== top.ref;
+        const disagreement = differs
+          ? `Laya chose ref ${top.ref} (${top.name ?? "unnamed"}); name and role matching chose ` +
+            `ref ${deterministicBest?.ref} (${deterministicBest?.name}).`
+          : null;
+
         if (result.pruned > 0) {
           notes.push(
             `${result.pruned} candidate(s) were pruned before ranking: Laya's option head has a fixed token budget, so a lexical pre-filter shortlists the field first.`,
+          );
+        }
+        if (flat) {
+          notes.push(
+            "Laya gave every candidate the same score, so its ranking carried no information. The deterministic result was used instead.",
+          );
+        }
+        if (differs) {
+          notes.push(
+            "Laya and the deterministic matcher disagree about the target. The model's pick was used; pass an explicit ref if you already have one.",
           );
         }
         notes.push(
@@ -187,16 +265,23 @@ export async function resolveTarget(input: ResolveInput): Promise<Proposal> {
           pruned: result.pruned,
           total: snap.elements.length,
           selectedRef: top.ref,
-          disagreedWithDeterministic: null,
+          deterministicRef: deterministicBest?.ref ?? null,
+          disagreedWithDeterministic: differs || flat,
+          disagreementReason: flat
+            ? "Laya scored every candidate identically, so it effectively chose nothing."
+            : disagreement,
           elapsedMs: Math.round(Date.now() - started),
           calibrated: false,
         });
 
+        // A flat distribution is not a decision. Fall back rather than act on noise.
+        const useFallback = flat && deterministicBest !== null;
+        const chosen = useFallback ? deterministicBest! : top;
         return {
-          target: toTarget(top.ref),
-          ref: top.ref,
-          via: "laya",
-          score: top.score,
+          target: toTarget(chosen.ref),
+          ref: chosen.ref,
+          via: useFallback ? "deterministic" : "laya",
+          score: useFallback ? chosen.score : top.score,
           ambiguous,
           alternatives: result.ranked.slice(1, 6).map((r: RankedCandidate) => {
             const el = byRef.get(r.ref);
@@ -223,7 +308,9 @@ export async function resolveTarget(input: ResolveInput): Promise<Proposal> {
         pruned: 0,
         total: snap.elements.length,
         selectedRef: null,
-        disagreedWithDeterministic: null,
+        deterministicRef: deterministicBest?.ref ?? null,
+        disagreedWithDeterministic: false,
+        disagreementReason: null,
         elapsedMs: Math.round(Date.now() - started),
         calibrated: false,
         error: message,
@@ -241,7 +328,6 @@ export async function resolveTarget(input: ResolveInput): Promise<Proposal> {
   }
   const second = scored[1];
   const ambiguous = second !== undefined && Math.abs(top.score - second.score) < 0.5;
-
   return {
     target: toTarget(top.el.ref),
     ref: top.el.ref,

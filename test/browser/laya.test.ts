@@ -120,7 +120,9 @@ describe("laya bridge (requires the optional model)", () => {
       pruned: result.pruned,
       total: CANDIDATES.length,
       selectedRef: result.ranked[0]?.ref ?? null,
-      disagreedWithDeterministic: null,
+      disagreedWithDeterministic: false,
+      deterministicRef: null,
+      disagreementReason: null,
       elapsedMs: result.elapsed_ms,
       calibrated: false,
     });
@@ -151,7 +153,9 @@ describe("laya bridge (requires the optional model)", () => {
       pruned: result.pruned,
       total: CANDIDATES.length,
       selectedRef: result.ranked[0]?.ref ?? null,
-      disagreedWithDeterministic: null,
+      disagreedWithDeterministic: false,
+      deterministicRef: null,
+      disagreementReason: null,
       elapsedMs: result.elapsed_ms,
       calibrated: false,
     });
