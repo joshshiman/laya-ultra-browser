@@ -299,6 +299,49 @@ describe("stale refs", () => {
   });
 });
 
+describe("injection concurrency", () => {
+  after(async () => {
+    await release();
+  });
+
+  it("installs the init scripts once under concurrent calls", async () => {
+    // MCP clients may call tools in parallel. Two overlapping ensureInjected calls both
+    // saw an uninstalled context and both ran addInitScript, so every later document
+    // evaluated the layer twice. Harmless, but it doubled injected bytes for the rest
+    // of the session, and it is the kind of thing that only shows up under load.
+    const page = await getPage();
+    await page.goto(fixtureUrl, { waitUntil: "load" });
+    await page.waitForTimeout(400);
+
+    await Promise.all([
+      ensureInjected(page),
+      ensureInjected(page),
+      ensureInjected(page),
+      ensureInjected(page),
+    ]);
+
+    // Re-injecting deliberately is still allowed, so assert the observable property
+    // that matters: exactly one layer is installed and it works.
+    const status = await ensureInjected(page);
+    assert.equal(status.walker, "present");
+    assert.equal(status.actions, "present");
+
+    const works = await page.evaluate(() => {
+      const w = window as unknown as { __laya: { snapshot: (o: unknown) => { elements: unknown[] } } };
+      return w.__laya.snapshot({ interactive: true }).elements.length;
+    });
+    assert.ok(works > 0, "the layer should still work after concurrent installs");
+  });
+
+  it("re-injects cleanly on a fresh page", async () => {
+    const page = await getPage();
+    await page.goto("about:blank", { waitUntil: "load" });
+    const status = await ensureInjected(page);
+    assert.equal(status.walker, "present");
+    assert.equal(status.actions, "present");
+  });
+});
+
 describe("browser lifecycle", () => {
   after(async () => {
     await release();

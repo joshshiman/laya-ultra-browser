@@ -1,0 +1,159 @@
+<!doctype html>
+<!--
+  A deliberately hostile page for the snapshot walker.
+
+  test/fixtures/shadow-lab.html proves the walker pierces shadow roots
+  correctly. It has 50 nodes, which means it cannot show what happens when a
+  page has thousands. This fixture exists to make the cost visible and to stay
+  deterministic, so a benchmark comparing two snapshot strategies is comparing
+  the strategies and not two different websites.
+
+  It is built to be the shape real component-heavy applications have:
+    - a large node count, most of it non-interactive chrome
+    - many open shadow roots, so the pierce path is exercised repeatedly
+    - controls below the fold, so the offscreen branch runs
+    - controls under a full-viewport overlay, so the occlusion hit-test runs
+    - a native <select> with options, so select enumeration is exercised
+    - nested scrolling containers, which break naive coordinate maths
+
+  The counts are parameters at the top so a future run can make it harsher
+  without editing the body.
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>dense-spa</title>
+    <style>
+      body { margin: 0; font: 13px/1.4 -apple-system, system-ui, sans-serif; }
+      .row { display: flex; gap: 8px; padding: 6px 10px; border-bottom: 1px solid #eee; }
+      .card { border: 1px solid #ddd; border-radius: 6px; padding: 8px; width: 260px; }
+      #scroller { height: 300px; overflow: auto; border: 1px solid #ccc; }
+      #overlay {
+        position: fixed; inset: 0; background: rgba(0,0,0,.35);
+        display: none; align-items: center; justify-content: center; z-index: 9999;
+      }
+      #overlay.open { display: flex; }
+      .pad { height: 700px; }
+    </style>
+  </head>
+  <body>
+    <h1>dense-spa</h1>
+    <div id="app"></div>
+
+    <div id="scroller"></div>
+    <div class="pad"></div>
+
+    <div id="overlay"><div class="card" id="modal">
+      <p>This overlay covers the controls underneath it.</p>
+      <button id="close">Close</button>
+    </div></div>
+
+    <script>
+      (function () {
+        var ROWS = 220;      // list rows, each a shadow host
+        var FIELDS = 6;      // interactive controls per row
+        var app = document.getElementById('app');
+        var scroller = document.getElementById('scroller');
+
+        // A custom element that renders its internals in an open shadow root,
+        // which is the case the walker's pierce path exists for.
+        var Row = document.createElement('div');
+        Row.id = 'row-template';
+
+        function makeShadow(host, build) {
+          var root = host.attachShadow({ mode: 'open' });
+          var style = document.createElement('style');
+          style.textContent = 'div{display:block;padding:2px 0}';
+          root.appendChild(style);
+          build(root);
+        }
+
+        for (var i = 0; i < ROWS; i++) {
+          var row = document.createElement('section');
+          row.className = 'row';
+          row.setAttribute('role', 'listitem');
+          row.setAttribute('aria-label', 'Result ' + (i + 1));
+
+          for (var f = 0; f < FIELDS; f++) {
+            var host = document.createElement('div');
+            host.className = 'card';
+            host.setAttribute('data-field', String(f));
+            (function (host, f, i) {
+              makeShadow(host, function (root) {
+                var label = document.createElement('label');
+                label.textContent = ['Title', 'Price', 'Rating', 'Stock', 'Seller', 'Delivery'][f] + ' ' + (i + 1);
+                label.htmlFor = 'f' + i + '-' + f;
+
+                var input = document.createElement('input');
+                input.id = 'f' + i + '-' + f;
+                input.type = f === 3 ? 'number' : 'text';
+                input.placeholder = ['Search title', 'Max price', 'Min rating', 'Quantity', 'Seller', 'Delivery'][f];
+                input.setAttribute('aria-label', label.textContent);
+
+                var button = document.createElement('button');
+                button.type = 'button';
+                button.textContent = f === 0 ? 'Add to cart' : 'Apply ' + f;
+
+                root.appendChild(label);
+                root.appendChild(input);
+                root.appendChild(button);
+              });
+            })(host, f, i);
+            row.appendChild(host);
+          }
+
+          var link = document.createElement('a');
+          link.href = '#item-' + i;
+          link.textContent = 'Open item ' + (i + 1);
+          row.appendChild(link);
+          app.appendChild(row);
+        }
+
+        // Bulk non-interactive chrome. This is the part that punishes a walker
+        // that enumerates every node instead of asking for controls directly.
+        var chrome = document.createElement('div');
+        for (var c = 0; c < 4000; c++) {
+          var span = document.createElement('span');
+          span.className = 'chrome';
+          span.textContent = 'metadata node ' + c;
+          chrome.appendChild(span);
+        }
+        app.appendChild(chrome);
+
+        // A native select with options, plus its own shadow host.
+        var selHost = document.createElement('div');
+        makeShadow(selHost, function (root) {
+          var select = document.createElement('select');
+          select.setAttribute('aria-label', 'Sort results by');
+          for (var o = 0; o < 40; o++) {
+            var opt = document.createElement('option');
+            opt.value = 'opt-' + o;
+            opt.textContent = 'Sort option ' + o;
+            select.appendChild(opt);
+          }
+          root.appendChild(select);
+        });
+        app.appendChild(selHost);
+
+        // The same controls again, inside a nested scroller, so the walker has
+        // to decide what "in the viewport" means for a clipped subtree.
+        for (var s = 0; s < 40; s++) {
+          var inner = document.createElement('button');
+          inner.type = 'button';
+          inner.textContent = 'Scrolled action ' + s;
+          scroller.appendChild(inner);
+        }
+
+        // Cover the top of the page so the occlusion hit-test has something to
+        // find. Toggled by the benchmark, not on by default, so the default
+        // numbers are not dominated by one branch.
+        window.__dense = {
+          overlay: document.getElementById('overlay'),
+          rows: ROWS,
+          fields: FIELDS,
+          setOverlay: function (on) { this.overlay.classList.toggle('open', !!on); }
+        };
+      })();
+    </script>
+  </body>
+</html>

@@ -1,0 +1,82 @@
+name: Bug report
+description: Something did not work, or worked incorrectly
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The most useful reports here are the ones where **a write reported success but
+        did not take**. That is the failure this project exists to prevent, so if you
+        hit it, say so plainly and quote the whole response.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what you got instead.
+      placeholder: |
+        browser_write_text goal="the email field" value="x" -> "verified: yes",
+        but the field stayed empty
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: A URL, or a reduced fixture. A page I can open is worth ten descriptions.
+    validations:
+      required: true
+
+  - type: textarea
+    id: response
+    attributes:
+      label: Full tool response
+      description: Including verified, stage, reason and element. Trim the element geometry if it is long.
+      render: text
+    validations:
+      required: true
+
+  - type: textarea
+    id: status
+    attributes:
+      label: browser_status output
+      render: text
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Server stderr with LAYA_LOG_LEVEL=debug
+      description: Trimmed to the part around the failure.
+      render: text
+
+  - type: dropdown
+    id: ranker
+    attributes:
+      label: Was Laya used to pick the target?
+      options:
+        - Yes, via a goal
+        - No, I passed a ref or selector
+        - Not sure
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: laya-ultra-browser version
+      placeholder: 0.1.0
+
+  - type: input
+    id: node
+    attributes:
+      label: Node version
+      placeholder: v22.11.0
+
+  - type: input
+    id: os
+    attributes:
+      label: OS
+      placeholder: macOS 26.6.2

@@ -333,6 +333,84 @@ function request(payload: Record<string, unknown>, timeoutMs: number): Promise<R
  * callers can decide between falling back to deterministic matching or surfacing the
  * problem to the agent.
  */
+export type SanitizeReport = {
+  ranked: RankedCandidate[];
+  /** Entries dropped and why, so a malformed response is visible rather than silent. */
+  rejected: Array<{ ref: unknown; reason: string }>;
+};
+
+/**
+ * Validates a ranking before anything acts on it.
+ *
+ * The model is a black box and its output is not trusted. This matters more than it
+ * might look: a NaN score makes the spread calculation NaN, every comparison against a
+ * threshold is then false, and the ranking reads as confident and unambiguous. A
+ * malformed response would therefore be treated as a decided answer, which is the exact
+ * failure the verified layer exists to prevent.
+ *
+ * Rules: the score must be a finite number in [0, 1]; the ref must be one the caller
+ * actually offered, so a stale or hallucinated ref cannot be acted on; and refs must be
+ * unique, so the alternatives list cannot show the same element twice.
+ */
+export function sanitizeRanking(
+  raw: unknown,
+  allowedRefs: ReadonlySet<number>,
+): SanitizeReport {
+  const rejected: SanitizeReport["rejected"] = [];
+  if (!Array.isArray(raw)) {
+    if (raw !== undefined && raw !== null) {
+      rejected.push({ ref: null, reason: "ranking was not an array" });
+    }
+    return { ranked: [], rejected };
+  }
+
+  const ranked: RankedCandidate[] = [];
+  const seen = new Set<number>();
+
+  for (const entry of raw) {
+    if (typeof entry !== "object" || entry === null) {
+      rejected.push({ ref: null, reason: "entry was not an object" });
+      continue;
+    }
+    const e = entry as Record<string, unknown>;
+    const ref = e.ref;
+    if (typeof ref !== "number" || !Number.isInteger(ref)) {
+      rejected.push({ ref, reason: "ref was not an integer" });
+      continue;
+    }
+    if (!allowedRefs.has(ref)) {
+      rejected.push({ ref, reason: "ref was not among the candidates offered" });
+      continue;
+    }
+    if (seen.has(ref)) {
+      rejected.push({ ref, reason: "ref appeared more than once" });
+      continue;
+    }
+    const score = e.score;
+    if (typeof score !== "number" || !Number.isFinite(score)) {
+      rejected.push({ ref, reason: `score was not a finite number (${String(score)})` });
+      continue;
+    }
+    seen.add(ref);
+    ranked.push({
+      ref,
+      score: Math.min(1, Math.max(0, score)),
+      role: typeof e.role === "string" ? e.role : null,
+      name: typeof e.name === "string" ? e.name : null,
+    });
+  }
+
+  ranked.sort((a, b) => b.score - a.score);
+  return { ranked, rejected };
+}
+
+/** Clamps a counter that may arrive as anything at all. */
+function safeCount(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0
+    ? Math.floor(value)
+    : 0;
+}
+
 export async function rank(
   goal: string,
   candidates: Array<Record<string, unknown>>,
@@ -348,11 +426,26 @@ export async function rank(
     },
     config.laya.requestTimeoutMs,
   );
+
+  const allowed = new Set<number>();
+  for (const c of candidates) {
+    if (typeof c.ref === "number") allowed.add(c.ref);
+  }
+  const { ranked, rejected } = sanitizeRanking(frame.ranked, allowed);
+  if (rejected.length > 0) {
+    // Not fatal, but never silent: a model returning malformed scores is a fact the
+    // operator needs, and silently dropping them would hide a degrading setup.
+    log.warn(
+      `discarded ${rejected.length} malformed ranking entr(ies): ` +
+        rejected.map((r) => `${String(r.ref)} (${r.reason})`).join(", "),
+    );
+  }
+
   return {
-    ranked: (frame.ranked ?? []) as RankedCandidate[],
-    pruned: (frame.pruned ?? 0) as number,
-    mode: (frame.mode ?? config.laya.mode) as string,
-    elapsed_ms: (frame.elapsed_ms ?? 0) as number,
+    ranked,
+    pruned: safeCount(frame.pruned),
+    mode: frame.mode === "noul" ? "noul" : "choice",
+    elapsed_ms: safeCount(frame.elapsed_ms),
     calibrated: false,
   };
 }

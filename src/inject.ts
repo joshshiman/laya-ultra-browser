@@ -77,13 +77,35 @@ const INSTALL_WALKER = wrapper(readSources().walker, HAS_WALKER);
 const INSTALL_ACTIONS = wrapper(readSources().actions, HAS_ACTIONS);
 
 let contextInstalled: BrowserContext | null = null;
+let installing: Promise<void> | null = null;
 
+/**
+ * Installs the init scripts once per context.
+ *
+ * Guarded by a shared promise rather than a boolean alone. MCP clients are free to call
+ * tools concurrently, and two overlapping ensureInjected calls both saw
+ * contextInstalled !== ctx and both ran addInitScript, so every subsequent document
+ * evaluated the layer twice. Harmless, because both files are idempotent, but it
+ * doubled the injected bytes on every page for the rest of the session.
+ */
 async function installOnContext(ctx: BrowserContext): Promise<void> {
   if (contextInstalled === ctx) return;
-  await ctx.addInitScript({ content: INSTALL_WALKER });
-  await ctx.addInitScript({ content: INSTALL_ACTIONS });
-  contextInstalled = ctx;
-  log.debug("init scripts installed on the browser context");
+  if (installing) {
+    await installing;
+    if (contextInstalled === ctx) return;
+  }
+  const pending = (async () => {
+    await ctx.addInitScript({ content: INSTALL_WALKER });
+    await ctx.addInitScript({ content: INSTALL_ACTIONS });
+    contextInstalled = ctx;
+    log.debug("init scripts installed on the browser context");
+  })();
+  installing = pending;
+  try {
+    await pending;
+  } finally {
+    if (installing === pending) installing = null;
+  }
 }
 
 export type InjectStatus = {

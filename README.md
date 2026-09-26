@@ -98,7 +98,8 @@ decider, and three things make that safe:
 
 If you want it to be genuinely good at picking controls, the supported path is
 fine-tuning, and [`docs/laya.md`](docs/laya.md) has the measurements, the cost, and a
-step-by-step route to it. Short version: auto-generate labels with the deterministic
+step-by-step route to it. For the wider picture, including the prompt-injection limit
+this design does not remove, read [`SECURITY.md`](SECURITY.md). Short version: auto-generate labels with the deterministic
 matcher, fine-tune upstream, convert with `laya-mlx convert`, point `LAYA_MODEL` at it.
 
 ## Platform support
@@ -469,7 +470,13 @@ to find out what a given browser tool can actually see and write.
 - [docs/architecture.md](docs/architecture.md) — how the pieces fit, and why
 - [docs/laya.md](docs/laya.md) — the local ranker, its measured behaviour and limits
 - [docs/shadow-dom.md](docs/shadow-dom.md) — the shadow DOM problem in detail
-- [CONTRIBUTING.md](CONTRIBUTING.md)
+- [CONTRIBUTING.md](CONTRIBUTING.md) — how to work on it
+- [SECURITY.md](SECURITY.md) — threat model, including the prompt-injection limit this
+  does **not** remove
+- [CHANGELOG.md](CHANGELOG.md)
+
+Diagrams are generated from Excalidraw sources in `docs/diagrams/`; run
+`npm run diagrams` after editing a `.dsl`.
 
 ## License
 

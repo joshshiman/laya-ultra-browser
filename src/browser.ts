@@ -92,12 +92,12 @@ async function ensureBrowser(): Promise<BrowserContext> {
       ctx = await withTimeout(
         launchContext(),
         config.callTimeoutMs,
-        "Chromium did not start",
-        "Check that the Playwright browser binaries are installed. Run: npx playwright install chromium",
+        "Chromium did not start within the launch timeout",
+        "A cold first launch on a slow disk can exceed this. Raise LAYA_CALL_TIMEOUT_MS, or check whether the browser is being downloaded at the same time.",
       );
     } catch (err) {
       launching = null;
-      throw err;
+      throw explainLaunchFailure(err);
     }
 
     // A persistent context already owns a browser; grab it for the close path.
@@ -187,6 +187,31 @@ function normalizeUrl(url: string): string {
     return `http://${trimmed}`;
   }
   return `https://${trimmed}`;
+}
+
+/**
+ * Turns a raw Playwright launch failure into something a user can act on.
+ *
+ * Playwright's own message for a missing browser is a box-drawn banner telling you to
+ * run `npx playwright install`, which is not enough: it does not say where to run it,
+ * and browsers are cached per Playwright version, so running it in the wrong directory
+ * installs the wrong revision and the error does not go away. The rest of Playwright's
+ * failures are passed through with their own text intact.
+ */
+function explainLaunchFailure(err: unknown): unknown {
+  if (!(err instanceof Error)) return err;
+  const message = err.message;
+  if (!/Executable doesn't exist|browserType\.launch.*executable/i.test(message)) {
+    return err;
+  }
+  return new ActionableError(
+    "The Chromium build this server needs is not installed.",
+    "Playwright caches browsers per version, so install the one this copy of the package " +
+      "expects. Run this in the laya-ultra-browser package directory, not an unrelated one:\n\n" +
+      "    npx playwright install chromium\n\n" +
+      "Or point the server at a Chrome you already have, with LAYA_CHROME_PATH=" +
+      "/Applications/Google\\ Chrome.app/Contents/MacOS/Google\\ Chrome.",
+  );
 }
 
 /** Rejects with an actionable timeout error if the promise does not settle in time. */
