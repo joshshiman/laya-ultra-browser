@@ -122,7 +122,103 @@ export type InjectStatus = {
  * merges into the existing object, so re-injection is safe and never leaves the
  * caller with a half-installed layer.
  */
+/**
+ * Pages whose current document is known to have the layer.
+ *
+ * Probing on every call was pure overhead. A single action used to cost four round
+ * trips to the renderer for one unit of work, because snapshot, the freshness check and
+ * the action each re-probed window.__laya before doing anything. Every probe is a CDP
+ * round trip and forces the renderer to run script, so this was the single largest
+ * source of per-action latency in the server.
+ *
+ * The init script re-installs the layer on every new document, so the entry only has to
+ * be dropped when the document changes, not on every call.
+ */
+const confirmed = new WeakMap<Page, InjectStatus>();
+const watched = new WeakSet<Page>();
+
+function watch(page: Page): void {
+  if (watched.has(page)) return;
+  watched.add(page);
+  const forget = () => confirmed.delete(page);
+  // Any navigation produces a new document, and a detached frame is gone. Both mean
+  // the next call has to probe again.
+  page.on("framenavigated", forget);
+  page.on("framedetached", forget);
+  page.on("close", forget);
+}
+
+/** Returned by a work evaluate that found no layer installed. */
+export const NEEDS_INSTALL = "__laya_needs_install__";
+
+/**
+ * Runs page-side work that needs window.__laya, installing it first if necessary.
+ *
+ * The point is the round-trip count. Checking for the layer in its own evaluate and
+ * then running the work in a second one doubles the cost of every call on the first
+ * use after a navigation, and a navigation happens between most task steps. So the
+ * check rides along inside the same evaluate as the work, and installation only costs
+ * an extra round trip when the layer genuinely is missing.
+ *
+ * `body` is written at each call site rather than passed in, because Playwright
+ * serialises arguments and a function cannot cross that boundary.
+ */
+export async function withLayer<T>(
+  page: Page,
+  work: (arg: never) => T | typeof NEEDS_INSTALL,
+  arg: unknown,
+): Promise<T> {
+  watch(page);
+  if (!confirmed.get(page)) await installOnContext(page.context());
+
+  const out = (await page.evaluate(work as (a: unknown) => unknown, arg)) as
+    | T
+    | typeof NEEDS_INSTALL;
+
+  if (out !== NEEDS_INSTALL) {
+    confirmed.set(page, {
+      walker: "present",
+      actions: "present",
+      build: BUILD_ID,
+      generation: null,
+    });
+    return out as T;
+  }
+
+  // The layer really is absent: install it, then do the work. This costs two round
+  // trips, but it is the rare path and the alternative is a second evaluate on every
+  // single call.
+  const status = await installNow(page);
+  return (await page.evaluate(work as (a: unknown) => unknown, arg)) as T;
+}
+
+/** Installs the layer and reports what happened. */
+async function installNow(page: Page): Promise<InjectStatus> {
+  const walkerResult = (await page.evaluate(INSTALL_WALKER)) as string;
+  if (walkerResult !== "installed" && walkerResult !== "skipped: not the top frame") {
+    throw new ActionableError(
+      `Failed to install the snapshot walker: ${walkerResult}`,
+      "This usually means the page blocked script evaluation. Try a page that is not behind a strict CSP, or set LAYA_LOG_LEVEL=debug for the full error.",
+    );
+  }
+  const actionsResult = (await page.evaluate(INSTALL_ACTIONS)) as string;
+  if (actionsResult !== "installed" && actionsResult !== "skipped: not the top frame") {
+    throw new ActionableError(`Failed to install the action layer: ${actionsResult}`);
+  }
+  confirmed.set(page, {
+    walker: walkerResult,
+    actions: actionsResult,
+    build: BUILD_ID,
+    generation: null,
+  });
+  return confirmed.get(page)!;
+}
+
 export async function ensureInjected(page: Page): Promise<InjectStatus> {
+  watch(page);
+  const known = confirmed.get(page);
+  if (known) return known;
+
   const ctx = page.context();
   await installOnContext(ctx);
 
@@ -140,7 +236,14 @@ export async function ensureInjected(page: Page): Promise<InjectStatus> {
   });
 
   if (status.hasWalker && status.hasActions) {
-    return { walker: "present", actions: "present", build: status.build, generation: status.generation };
+    const resolved: InjectStatus = {
+      walker: "present",
+      actions: "present",
+      build: status.build,
+      generation: status.generation,
+    };
+    confirmed.set(page, resolved);
+    return resolved;
   }
 
   log.debug("in-page layer missing, injecting now");
@@ -156,12 +259,26 @@ export async function ensureInjected(page: Page): Promise<InjectStatus> {
     throw new ActionableError(`Failed to install the action layer: ${actionsResult}`);
   }
 
-  return {
+  const resolved: InjectStatus = {
     walker: walkerResult,
     actions: actionsResult,
     build: BUILD_ID,
     generation: null,
   };
+  if (walkerResult === "installed" && actionsResult === "installed") {
+    confirmed.set(page, resolved);
+  }
+  return resolved;
+}
+
+/**
+ * Drops the cached confirmation for a page, forcing the next call to probe.
+ *
+ * Used by tests, and by anything that loads a document in a way the navigation events
+ * do not describe.
+ */
+export function forgetInjection(page: Page): void {
+  confirmed.delete(page);
 }
 
 /** Reports whether the layer is present without attempting to install it. */

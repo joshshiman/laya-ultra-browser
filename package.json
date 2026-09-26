@@ -35,6 +35,12 @@
     "dev": "tsc -p tsconfig.json --watch",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json --noEmit",
     "audit:config": "node scripts/audit-config.mjs",
+    "bench": "npm run build && node bench/measure.mjs",
+    "bench:live": "npm run build && node bench/measure.mjs --live --json bench/results/live.json",
+    "bench:calls": "npm run build && node bench/callgraph.mjs",
+    "bench:mcp": "npm run build && node bench/mcp-probe.mjs",
+    "bench:ranker": "npm run build && node bench/ranker-accuracy.mjs",
+    "bench:check": "npm run build && node bench/check.mjs",
     "pretest": "npm run build && npm run build:inject && npm run build:test",
     "test": "node --test --test-concurrency=1 \"dist-test/test/**/*.test.js\"",
     "test:unit": "npm run build:test && node --test --test-concurrency=1 \"dist-test/test/unit/*.test.js\"",
@@ -45,7 +51,8 @@
     "screenshot": "npm run build && node scripts/screenshot-dashboard.mjs",
     "prepack": "npm run build",
     "prepare": "npm run build",
-    "diagrams": "bash scripts/render-diagrams.sh"
+    "diagrams": "bash scripts/render-diagrams.sh",
+    "round-trips": "npm run build && node scripts/round-trips.mjs"
   },
   "keywords": [
     "mcp",

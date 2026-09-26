@@ -54,7 +54,18 @@ things went wrong: gone, not rendered, scrolled out of view, or covered.
 creates the Laya environment under `~/.laya-ultra-browser` without touching any system
 Python.
 
-**Tests: 152.** The shadow DOM conformance fixture (72 assertions) now runs in real
+**Round trips to the renderer.** Every tool call now costs one `page.evaluate` instead
+of four. Each evaluate is a CDP round trip that also forces the renderer to run script,
+and the occlusion check inside the walker forces style and layout recalculation, so this
+was the largest single source of per-action latency. Three changes: the in-page layer
+confirmation is cached per page rather than re-probed on every call; the freshness guard
+for a ref moved inside the action's own evaluate instead of being a separate call; and
+`browser_find` stopped walking the page a second time to annotate two fields
+`resolveTarget` already had. The budget is asserted in
+`test/browser/round-trips.test.ts` so it cannot silently regress, and
+`npm run round-trips` reports it.
+
+**Tests: 164.** The shadow DOM conformance fixture (72 assertions) now runs in real
 Chromium through the same injection path a user hits. Plus a pure-function unit suite, a
 suite that drives `dist/server.js` over the MCP protocol, one that exercises the real
 Laya bridge on a GPU runner, and one that loads the dashboard in a browser and checks

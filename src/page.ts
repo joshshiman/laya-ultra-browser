@@ -7,7 +7,7 @@
  * runtime.
  */
 import type { Page } from "playwright";
-import { ensureInjected } from "./inject.js";
+import { ensureInjected, NEEDS_INSTALL, withLayer } from "./inject.js";
 
 export type SnapshotOptions = {
   interactive?: boolean;
@@ -92,7 +92,7 @@ export type ResolvedElement = {
 export type WriteResult = {
   ok: boolean;
   verified?: boolean;
-  stage: "resolve" | "precheck" | "act" | "verify" | "done";
+  stage: "resolve" | "stale" | "precheck" | "act" | "verify" | "done";
   reason: string | null;
   /** Text fields offered when a write was refused for resolving to a non-field. */
   textEntryCandidates?: Array<{ tag: string; id: string; name: string; value?: string | null }>;
@@ -166,45 +166,89 @@ export type Target = {
 };
 
 export async function snapshot(page: Page, opts: SnapshotOptions): Promise<SnapshotResult> {
-  await ensureInjected(page);
-  return page.evaluate((o: SnapshotOptions) => {
-    const w = window as unknown as { __laya: { snapshot: (x: unknown) => SnapshotResult } };
-    return w.__laya.snapshot(o);
-  }, opts) as Promise<SnapshotResult>;
+  return withLayer<SnapshotResult>(
+    page,
+    (o: never) => {
+      const w = window as unknown as { __laya?: { snapshot?: (x: unknown) => SnapshotResult } };
+      if (typeof w.__laya?.snapshot !== "function") return NEEDS_INSTALL;
+      return w.__laya.snapshot(o);
+    },
+    opts,
+  );
 }
 
 export async function writeText(
   page: Page,
   target: Target,
   value: string,
-  opts: { noDescend?: boolean; scroll?: boolean } = {},
+  opts: { noDescend?: boolean; scroll?: boolean; requireFreshRef?: boolean | undefined } = {},
 ): Promise<WriteResult> {
-  await ensureInjected(page);
-  return page.evaluate(
-    (a: { target: Target; value: string; opts: { noDescend?: boolean; scroll?: boolean } }) => {
+  return withLayer<WriteResult>(
+    page,
+    (a: {
+      target: Target;
+      value: string;
+      noDescend: boolean | undefined;
+      scroll: boolean | undefined;
+      mustBeFresh: boolean;
+    }): WriteResult | typeof NEEDS_INSTALL => {
       const w = window as unknown as {
-        __laya: { writeText: (t: Target, v: string, o: unknown) => WriteResult };
+        __laya?: {
+          fresh: (r: number) => boolean;
+          writeText: (t: Target, v: string, o: unknown) => WriteResult;
+        };
       };
-      return w.__laya.writeText(a.target, a.value, a.opts);
+      if (typeof w.__laya?.writeText !== "function") return NEEDS_INSTALL;
+      // The freshness guard runs first, in the same tick as the action, so a stale ref
+      // still cannot dispatch anything. Folding it in here takes the happy path from
+      // two round trips to the renderer down to one, which is the difference between a
+      // tool that feels instant and one that does not.
+      if (a.mustBeFresh && w.__laya.fresh(a.target.ref as number) !== true) {
+        return { ok: false, stage: "stale", reason: "the ref is no longer usable" };
+      }
+      return w.__laya.writeText(a.target, a.value, { noDescend: a.noDescend, scroll: a.scroll });
     },
-    { target, value, opts },
+    {
+      target,
+      value,
+      noDescend: opts.noDescend,
+      scroll: opts.scroll,
+      mustBeFresh: opts.requireFreshRef === true && target.ref !== undefined,
+    },
   );
 }
 
 export async function clickDeep(
   page: Page,
   target: Target,
-  opts: { noDescend?: boolean; scroll?: boolean } = {},
+  opts: { noDescend?: boolean; scroll?: boolean; requireFreshRef?: boolean | undefined } = {},
 ): Promise<ClickResult> {
-  await ensureInjected(page);
-  return page.evaluate(
-    (a: { target: Target; opts: { noDescend?: boolean; scroll?: boolean } }) => {
+  return withLayer<ClickResult>(
+    page,
+    (a: {
+      target: Target;
+      noDescend: boolean | undefined;
+      scroll: boolean | undefined;
+      mustBeFresh: boolean;
+    }): ClickResult | typeof NEEDS_INSTALL => {
       const w = window as unknown as {
-        __laya: { clickDeep: (t: Target, o: unknown) => ClickResult };
+        __laya?: {
+          fresh: (r: number) => boolean;
+          clickDeep: (t: Target, o: unknown) => ClickResult;
+        };
       };
-      return w.__laya.clickDeep(a.target, a.opts);
+      if (typeof w.__laya?.clickDeep !== "function") return NEEDS_INSTALL;
+      if (a.mustBeFresh && w.__laya.fresh(a.target.ref as number) !== true) {
+        return { ok: false, stage: "stale", reason: "the ref is no longer usable" } as ClickResult;
+      }
+      return w.__laya.clickDeep(a.target, { noDescend: a.noDescend, scroll: a.scroll });
     },
-    { target, opts },
+    {
+      target,
+      noDescend: opts.noDescend,
+      scroll: opts.scroll,
+      mustBeFresh: opts.requireFreshRef === true && target.ref !== undefined,
+    },
   );
 }
 
@@ -212,17 +256,29 @@ export async function selectOption(
   page: Page,
   target: Target,
   value: string,
-  opts: { noDescend?: boolean } = {},
+  opts: { noDescend?: boolean; requireFreshRef?: boolean | undefined } = {},
 ): Promise<SelectResult> {
-  await ensureInjected(page);
-  return page.evaluate(
-    (a: { target: Target; value: string; opts: { noDescend?: boolean } }) => {
+  return withLayer<SelectResult>(
+    page,
+    (a: { target: Target; value: string; noDescend: boolean | undefined; mustBeFresh: boolean }): SelectResult | typeof NEEDS_INSTALL => {
       const w = window as unknown as {
-        __laya: { selectOption: (t: Target, v: string, o: unknown) => SelectResult };
+        __laya?: {
+          fresh: (r: number) => boolean;
+          selectOption: (t: Target, v: string, o: unknown) => SelectResult;
+        };
       };
-      return w.__laya.selectOption(a.target, a.value, a.opts);
+      if (typeof w.__laya?.selectOption !== "function") return NEEDS_INSTALL;
+      if (a.mustBeFresh && w.__laya.fresh(a.target.ref as number) !== true) {
+        return { ok: false, stage: "stale", reason: "the ref is no longer usable" } as SelectResult;
+      }
+      return w.__laya.selectOption(a.target, a.value, { noDescend: a.noDescend });
     },
-    { target, value, opts },
+    {
+      target,
+      value,
+      noDescend: opts.noDescend,
+      mustBeFresh: opts.requireFreshRef === true && target.ref !== undefined,
+    },
   );
 }
 

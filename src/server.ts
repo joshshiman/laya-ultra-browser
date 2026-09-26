@@ -23,7 +23,6 @@ import { ActionableError, describeError, log } from "./log.js";
 import {
   clickDeep,
   inspect as inspectTarget,
-  isFresh,
   probeRef,
   readValue,
   selectOption,
@@ -270,9 +269,10 @@ server.registerTool(
   async ({ goal, limit, selector, deterministic }) =>
     guard("browser_find", async () => {
       const page = await getPage();
+      // No second snapshot here. resolveTarget already walked the page and carried the
+      // disabled and visibility flags through on each alternative, so re-walking it just
+      // to read two fields doubled the cost of the cheapest tool for no new information.
       const proposal = await resolveTarget({ page, goal, selector, deterministic });
-      const snap = await snapshot(page, { interactive: true, maxElements: config.maxSnapshotElements });
-      const byRef = new Map(snap.elements.map((el) => [el.ref, el]));
 
       const rows: string[] = [];
       rows.push(`goal: ${goal}`);
@@ -290,8 +290,11 @@ server.registerTool(
       rows.push("");
       rows.push(`ref=${proposal.ref}  <-- selected`);
       for (const alt of proposal.alternatives.slice(0, limit - 1)) {
-        const el = byRef.get(alt.ref);
-        const flags = el?.disabled ? " [disabled]" : el && el.visibility !== "clear" ? ` [${el.visibility}]` : "";
+        const flags = alt.disabled
+          ? " [disabled]"
+          : alt.visibility && alt.visibility !== "clear"
+            ? ` [${alt.visibility}]`
+            : "";
         rows.push(`ref=${alt.ref}    ${alt.role}  ${JSON.stringify(truncate(alt.name, 90))}${flags}`);
       }
       for (const note of proposal.notes) rows.push(`\nnote: ${note}`);
@@ -324,6 +327,20 @@ const targetShape = {
   deterministic: z.boolean().default(false).describe("Resolve the goal without Laya."),
 };
 
+/**
+ * Turns a stale action result into the actionable error an agent can act on.
+ *
+ * Only reached on the failure path, so the extra round trip that works out the reason
+ * costs nothing in the normal case.
+ */
+async function staleRefError(page: Awaited<ReturnType<typeof getPage>>, ref: number): Promise<ActionableError> {
+  const why = await probeRef(page, ref);
+  return new ActionableError(
+    `ref ${ref} is stale: ${why}.`,
+    "Refs stay valid until the page navigates or the DOM is replaced. Call browser_snapshot again and use a ref from the new list, or pass a goal instead.",
+  );
+}
+
 /** Builds an in-page target from explicit arguments, or resolves a goal to a ref. */
 async function buildTarget(
   goal: string | undefined,
@@ -334,20 +351,18 @@ async function buildTarget(
     role?: string | undefined;
   },
   opts: { page: Awaited<ReturnType<typeof getPage>>; deterministic: boolean },
-): Promise<{ target: Target; describe: string; notes: string[] }> {
+): Promise<{ target: Target; describe: string; notes: string[]; requireFreshRef?: boolean }> {
   if (explicit.ref !== undefined) {
-    // Check the ref before acting on it. walker.js already fails closed on an
-    // unresolvable ref, but its message is generic; asking whether the node is still
-    // rendered and unoccluded turns "did not resolve" into the things that actually
-    // went wrong, which is the difference between a retryable error and a dead end.
-    if (!(await isFresh(opts.page, explicit.ref))) {
-      const why = await probeRef(opts.page, explicit.ref);
-      throw new ActionableError(
-        `ref ${explicit.ref} is stale: ${why}.`,
-        "Refs stay valid until the page navigates or the DOM is replaced. Call browser_snapshot again and use a ref from the new list, or pass a goal instead.",
-      );
-    }
-    return { target: { ref: explicit.ref }, describe: `ref ${explicit.ref}`, notes: [] };
+    // Freshness is checked inside the action's own evaluate, not in a separate call.
+    // It still runs before anything is dispatched, but the happy path costs one round
+    // trip to the renderer instead of two. The reason a ref went stale is only worked
+    // out on the failure path, which is rare.
+    return {
+      target: { ref: explicit.ref },
+      describe: `ref ${explicit.ref}`,
+      notes: [],
+      requireFreshRef: true,
+    };
   }
   if (explicit.selector) {
     return { target: { css: explicit.selector }, describe: `css ${explicit.selector}`, notes: [] };
@@ -452,10 +467,16 @@ server.registerTool(
       const startedAt = Date.now();
       const resolved = await buildTarget(args.goal, args, { page, deterministic: args.deterministic });
       const result = await withTimeout(
-        writeText(page, resolved.target, args.value, { noDescend: args.noDescend }),
+        writeText(page, resolved.target, args.value, {
+          noDescend: args.noDescend,
+          requireFreshRef: resolved.requireFreshRef,
+        }),
         config.callTimeoutMs,
         "The write did not complete",
       );
+      if (result.stage === "stale") {
+        throw await staleRefError(page, resolved.target.ref as number);
+      }
       const plain = result as unknown as Record<string, unknown>;
       recordAction({
         tool: "browser_write_text",
@@ -486,10 +507,16 @@ server.registerTool(
       const page = await getPage();
       const resolved = await buildTarget(args.goal, args, { page, deterministic: args.deterministic });
       const result = await withTimeout(
-        clickDeep(page, resolved.target, { noDescend: args.noDescend }),
+        clickDeep(page, resolved.target, {
+          noDescend: args.noDescend,
+          requireFreshRef: resolved.requireFreshRef,
+        }),
         config.callTimeoutMs,
         "The click did not complete",
       );
+      if (result.stage === "stale") {
+        throw await staleRefError(page, resolved.target.ref as number);
+      }
       const report = actionReport("click", resolved, result as unknown as Record<string, unknown>);
       return `${report}\nnote: ${String(result.note ?? "")}\nurlChanged: ${String(result.urlChanged)}`;
     }),
@@ -513,10 +540,16 @@ server.registerTool(
       const startedAt = Date.now();
       const resolved = await buildTarget(args.goal, args, { page, deterministic: args.deterministic });
       const result = await withTimeout(
-        selectOption(page, resolved.target, args.value, { noDescend: args.noDescend }),
+        selectOption(page, resolved.target, args.value, {
+          noDescend: args.noDescend,
+          requireFreshRef: resolved.requireFreshRef,
+        }),
         config.callTimeoutMs,
         "The selection did not complete",
       );
+      if (result.stage === "stale") {
+        throw await staleRefError(page, resolved.target.ref as number);
+      }
       const plain = result as unknown as Record<string, unknown>;
       recordAction({
         tool: "browser_select_option",

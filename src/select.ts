@@ -32,8 +32,21 @@ export type Proposal = {
   via: "laya" | "deterministic" | "explicit-ref";
   /** Model confidence in [0,1] when via==="laya". Not a calibrated probability. */
   score?: number;
-  /** Runners-up, so the agent can retry with a different element. */
-  alternatives: Array<{ ref: number; score?: number; name: string; role: string }>;
+  /**
+   * Runners-up, so the agent can retry with a different element.
+   *
+   * Carries disabled and visibility because resolveTarget already had them from the
+   * snapshot it took. browser_find used to walk the entire page a second time purely to
+   * annotate these two fields, which doubled the cost of the cheapest read-only tool.
+   */
+  alternatives: Array<{
+    ref: number;
+    score?: number;
+    name: string;
+    role: string;
+    disabled?: boolean;
+    visibility?: string;
+  }>;
   /** True when the top two were close enough that the pick is a coin flip. */
   ambiguous: boolean;
   /** Notes the agent should see: pruning, fallback reason, calibration caveat. */
@@ -290,6 +303,7 @@ export async function resolveTarget(input: ResolveInput): Promise<Proposal> {
               score: r.score,
               name: el ? el.name : `ref ${r.ref}`,
               role: el ? el.role : "unknown",
+              ...(el ? { disabled: el.disabled, visibility: el.visibility } : {}),
             };
           }),
           notes,
@@ -339,6 +353,8 @@ export async function resolveTarget(input: ResolveInput): Promise<Proposal> {
       score,
       name: el.name || `(${el.tag})`,
       role: el.role,
+      disabled: el.disabled,
+      visibility: el.visibility,
     })),
     notes,
   };
