@@ -10,10 +10,36 @@
 import { after, before, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { repoPath } from "../support/paths.js";
 
 const fixtureUrl = pathToFileURL(repoPath("test/fixtures/shadow-lab.html")).href;
+
+/**
+ * Throwaway profile directories under the OS temp dir.
+ *
+ * A browser profile holds session cookies, so it must never land in the repository,
+ * and it must not collide with the profile a developer actually uses. Removed on exit
+ * whether the suite passed or failed.
+ */
+const profileDirs: string[] = [];
+function tempProfile(): string {
+  const dir = mkdtempSync(join(tmpdir(), "laya-ultra-browser-test-"));
+  profileDirs.push(dir);
+  return dir;
+}
+process.on("exit", () => {
+  for (const dir of profileDirs) {
+    try {
+      rmSync(dir, { recursive: true, force: true });
+    } catch {
+      /* best effort */
+    }
+  }
+});
 
 type Pending = { resolve: (v: any) => void; reject: (e: Error) => void };
 
@@ -137,7 +163,7 @@ describe("mcp server over stdio", () => {
   before(async () => {
     client = new McpClient(process.execPath, [repoPath("dist/server.js")], {
       // Keep the suite off any developer profile and out of the developer's home.
-      LAYA_PROFILE_DIR: repoPath(".test-profile"),
+      LAYA_PROFILE_DIR: tempProfile(),
       LAYA_VISUALIZER: "false",
     });
     await client.initialize();
@@ -305,7 +331,7 @@ describe("mcp server over stdio", () => {
     // An orphaned Chromium is the classic MCP server bug. The parent closing the pipe
     // has to take the browser and the Laya bridge down with it.
     const solo = new McpClient(process.execPath, [repoPath("dist/server.js")], {
-      LAYA_PROFILE_DIR: repoPath(".test-profile-2"),
+      LAYA_PROFILE_DIR: tempProfile(),
     });
     await solo.initialize();
     await solo.callTool("browser_navigate", { url: fixtureUrl });

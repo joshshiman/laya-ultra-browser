@@ -254,6 +254,65 @@ Stated plainly, because a tool that hides these is worse than one without the fe
 - **The browser is Chromium.** Driven through Playwright.
 - **Single page, single browser.** One tab at a time. Tab management is not built.
 
+## Troubleshooting
+
+**`Cannot find module '.../dist/server.js'`**
+
+The install ran but the TypeScript was not compiled. `npm` compiles a git dependency
+via its `prepare` script, and some npm configurations suppress dependency lifecycle
+scripts. Clone and build instead, then point your client at the result:
+
+```bash
+git clone https://github.com/joshshiman/laya-ultra-browser
+cd laya-ultra-browser && npm install && npm run build
+```
+
+Then use `command: "node"` with `args: ["/absolute/path/to/laya-ultra-browser/dist/server.js"]`.
+
+**`browser_status` says Laya is unavailable**
+
+It lists every interpreter it tried. Run `npm run laya:check`, or point
+`LAYA_PYTHON` at an interpreter that can import the runtime.
+
+**`Executable doesn't exist at .../ms-playwright/...`**
+
+The browser binary was not downloaded. Run `npx playwright install chromium`.
+
+**A write came back `verified: false`**
+
+This is the tool working. Read `reason`:
+
+| `stage` | What it means | What to do |
+|---|---|---|
+| `resolve` | Nothing matched. | Re-snapshot; the control may be hidden, still mounting, or behind a closed shadow root. |
+| `precheck` | The target cannot take a value, or is disabled or readonly. | Use `browser_inspect` to see what it actually is. A `precheck` refusal lists the real text fields. |
+| `verify` | The write landed but did not persist, or a wrapper echoed it. | Do not retry the same target. Snapshot again and pick another ref. |
+
+**A write came back `verified: true` but the page looks unchanged**
+
+Verification reads the control, not the application state. A framework can accept the
+value and then discard it on its next render. Confirm with a fresh
+`browser_read_value` in a later call, and check whether the app moved the value
+somewhere else.
+
+**`Laya's confidence is not calibrated` note, or rankings look arbitrary**
+
+Expected. See [docs/laya.md](docs/laya.md). Use explicit refs.
+
+**The browser window does not appear**
+
+Headless by default. Set `LAYA_HEADED=true`.
+
+**Nothing is logged**
+
+All diagnostics go to stderr, because stdout carries the MCP protocol. Set
+`LAYA_LOG_LEVEL=debug` and look at your client's server log.
+
+**The dashboard is not at the port I expected**
+
+If the configured port is busy, the server takes any free one instead of failing. The
+actual URL is in `browser_status` under `visualizer.url` and in the server's stderr.
+
 ## Development
 
 ```bash
