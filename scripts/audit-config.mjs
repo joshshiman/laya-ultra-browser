@@ -27,9 +27,18 @@ const envs = [...new Set([...configSrc.matchAll(/"(LAYA_[A-Z_]+)"/g)].map((m) =>
 const sources = walk(join(root, "src")).filter((f) => !f.endsWith("config.ts"));
 
 const readme = readFileSync(join(root, "README.md"), "utf8");
-const docs = readdirSync(join(root, "docs"))
-  .map((f) => readFileSync(join(root, "docs", f), "utf8"))
-  .join("\n");
+// Only markdown, and recurse: docs/ holds image assets and a diagrams/ source
+// directory, and readFileSync on a directory throws EISDIR.
+function markdown(dir) {
+  return readdirSync(dir, { withFileTypes: true })
+    .flatMap((entry) => {
+      const full = join(dir, entry.name);
+      if (entry.isDirectory()) return markdown(full);
+      return entry.name.endsWith(".md") ? [readFileSync(full, "utf8")] : [];
+    })
+    .join("\n");
+}
+const docs = markdown(join(root, "docs"));
 
 /** LAYA_MAX_OPTIONS -> maxOptions, LAYA_INCLUDE_HIDDEN -> includeHidden */
 function toCamel(env) {

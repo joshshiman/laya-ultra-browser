@@ -4,6 +4,8 @@ Four layers. The rule that shapes all of them: **Laya proposes, the deterministi
 disposes and verifies.** The model never touches the page and never decides that an
 action succeeded.
 
+![Detailed flow: the agent's goal is snapshotted, Laya ranks the candidate table, the chosen ref is checked for being a text-entry control, then resolved to the real inner control, written, and read back](architecture.png)
+
 ```
 MCP client
     │  stdio, JSON-RPC

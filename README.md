@@ -1,43 +1,105 @@
 # laya-ultra-browser
 
-An MCP server for browser control where **a write that did not happen is reported as a
-failure**, not as success.
+[![CI](https://github.com/joshshiman/laya-ultra-browser/actions/workflows/ci.yml/badge.svg)](https://github.com/joshshiman/laya-ultra-browser/actions/workflows/ci.yml)
+[![license](https://img.shields.io/badge/license-MIT-8b949e.svg)](LICENSE)
+[![node](https://img.shields.io/badge/node-%3E%3D22-5FA04E.svg)](https://nodejs.org)
+[![mcp](https://img.shields.io/badge/MCP-server-1971c2.svg)](https://modelcontextprotocol.io)
+[![model](https://img.shields.io/badge/ranker-local_Laya-ffd43b.svg)](docs/laya.md)
+[![platform](https://img.shields.io/badge/macOS%20%7C%20Linux%20%7C%20Windows-browser_in%20tools-blueviolet.svg)](#platform-support)
 
-On modern web applications most of the interface lives inside component shadow roots.
-A text field you can see on screen is very often not reachable with a CSS selector,
-and a write aimed at the visible wrapper can report success while changing nothing a
-user would ever see. This server exists because that failure is silent, and silent
-failures are worse than errors: an agent fills in a form, gets told it worked, and
-moves on.
+**A browser MCP server where a local Laya model decides what to click, and every write
+is verified by reading the value back.**
 
-Every mutating call here resolves through shadow boundaries, writes to the real inner
-control, and then **reads the value back**. `verified: true` means the value was
-confirmed on the control itself. Anything else comes back as a failure with a reason.
+Most browser agents work like this: screenshot the page, send the image to a large
+model, get back a coordinate, act, repeat. That costs an image and a network round trip
+on **every single step**, and a lot of tokens for a decision that is really just "which
+of these twelve things did they mean?"
 
-Optionally, a small local language model ranks candidate elements for you, so you can
-describe a target in plain language instead of tracking refs. That is an accelerator,
-never a dependency: everything works without it.
+This one skips the screenshot entirely. Laya is a small local encoder, so the server
+hands it the page's control table as text and gets a ranking back from **one forward
+pass** in roughly a tenth of a second. No image is generated, no token is spent on
+pixels, and nothing leaves your machine.
 
-## Why this exists
+![How a request flows: say what you want, the page is snapshotted, Laya ranks every candidate in one local pass, then the write is resolved and the value read back](docs/flow.png)
+
+Then the part that makes a probabilistic model safe to put in the loop: **Laya only
+ever ranks.** It never touches the page and never decides that an action worked. That
+job belongs to a verified write path, and because that path reads the value back off
+the real control, a wrong guess becomes a refusal instead of a silent no-op.
+
+![Three tool calls: a goal the model got wrong is refused with the available text fields listed, then two writes into real controls verify](docs/verified-write.png)
+
+## Why the model cannot quietly break something
+
+This is the whole design, and it is worth being blunt about it.
+
+On component-heavy web applications, a write can resolve the element, report success,
+and change nothing a user would ever see. Assigning a value to a `<button>` is the
+cleanest example: it creates a plain property, the value persists, a read-back matches,
+and an unguarded tool reports a cheerful success for a write that went nowhere.
+
+Read-back verification is necessary but not sufficient, because it answers *"did the
+value land on the node I wrote to?"* and not *"was that the right node?"* So the write
+path also **refuses targets that cannot hold a value**, and the refusal lists the text
+fields you could have meant. That is the first red block in the screenshot above: Laya
+ranked a button first for a field goal, and instead of a fake success you get the
+reason and the alternatives.
 
 Three failure modes, all observed on real single-page applications:
 
-1. **CSS cannot cross a shadow boundary.** A visible control with an id returns
-   `null` from `document.getElementById`, and always will. Most tooling handles this
-   with the browser's accessibility tree, which is genuinely good at *reading*.
+1. **CSS cannot cross a shadow boundary.** A visible control with an id returns `null`
+   from `document.getElementById`, and always will. One application surveyed had 86% of
+   its controls behind a boundary, nested up to eight deep.
 
-2. **Writes can silently no-op.** The hard case. A write resolves the element, reports
-   success, and the value never appears. Meanwhile a manual write to the same node
-   persists perfectly. The bug is in the write path, and it is invisible from the
-   outside.
+2. **Writes can silently no-op.** The hard case, above. Every in-page write mechanism
+   works when driven directly, so the fault is in the tool's write path and is
+   invisible from the outside.
 
-3. **The accessibility tree does not model paint order.** A snapshot will happily list
-   a control that is four thousand pixels below the fold, or one sitting underneath a
-   full-viewport overlay, with no hint that either is unreachable. You cannot click
-   what you cannot see.
+3. **The accessibility tree does not model paint order.** A snapshot will list a
+   control four thousand pixels below the fold, or one under a full-viewport overlay,
+   with no hint that either is unreachable. You cannot click what you cannot see.
 
-This server fixes (2) with verification, covers (3) with an occlusion check, and
-handles (1) explicitly rather than pretending selectors work.
+## What Laya does here, concretely
+
+Measured on an M-series Mac, not projected:
+
+| | |
+|---|---|
+| Rank a page's candidates | **one forward pass, 100-270 ms** |
+| Screenshots per action | **zero** |
+| Image tokens per action | **zero** |
+| Network calls per action | **zero**, it runs on your GPU |
+| Ranking 4 candidates in `noul` mode | 3.1 s, one pass each |
+
+Laya is a bidirectional encoder with no token decoding, so it cannot generate a plan or
+a selector. It can only score options you give it, which is exactly the right shape for
+this job: the model contributes fast semantic ranking over many candidates at once, and
+deterministic code contributes everything that has to be correct.
+
+It also gets cheaper the more you use it. There is no per-step model call to optimise,
+because there is no per-step model call.
+
+### Honest status of the model
+
+**The base checkpoint is not accurate yet, and you should know that before you rely on
+it.** Measured here, asked which of five form fields is the email address, it picked
+"First name". Asked to find one deal out of five by region and value, it picked the
+wrong one. Its confidence is not calibrated, and the model's own authors concluded that
+confidence gating cannot protect you.
+
+So it is wired as a **shortlist generator behind a deterministic matcher**, never as the
+decider, and three things make that safe:
+
+- Every ranking is compared against what plain name-and-role matching would have
+  chosen, and a disagreement is reported loudly. The dashboard shows both.
+- A ranking whose scores are all but identical is treated as *no decision at all* and
+  falls back to the deterministic answer.
+- Whatever the model picks, the write still has to verify.
+
+If you want it to be genuinely good at picking controls, the supported path is
+fine-tuning, and [`docs/laya.md`](docs/laya.md) has the measurements, the cost, and a
+step-by-step route to it. Short version: auto-generate labels with the deterministic
+matcher, fine-tune upstream, convert with `laya-mlx convert`, point `LAYA_MODEL` at it.
 
 ## Platform support
 
@@ -91,10 +153,13 @@ lifecycle scripts, and the TypeScript then never gets compiled.
 
 To pin a version, add a tag: `github:joshshiman/laya-ultra-browser#v0.1.0`.
 
-### Optional: local ranking
+That is enough to get a working browser server. To get the local ranker, which is the
+point of the tool, add one more step.
 
-The ranking layer needs a Python environment with a local model runtime. It is
-entirely optional; without it, targets are matched by accessible name and role.
+### Add the local ranker
+
+Laya runs through [MLX](https://github.com/ml-explore/mlx) on your GPU, so it needs a
+Python environment. The setup script makes one, isolated, in about a minute:
 
 ```bash
 git clone https://github.com/joshshiman/laya-ultra-browser
@@ -102,22 +167,25 @@ cd laya-ultra-browser
 npm run setup:laya
 ```
 
-That script uses [uv](https://docs.astral.sh/uv/) to create an isolated environment
-under `~/.laya-ultra-browser`. It does not touch your system Python, your `pyenv`
-global, or anything else on your machine.
+It uses [uv](https://docs.astral.sh/uv/) to fetch a managed interpreter, so it does not
+care what Python you already have, and it installs into `~/.laya-ultra-browser` without
+touching your system Python or your `pyenv` global. First run downloads roughly 2 GB of
+model weights; after that it loads in under half a second.
 
-Check it at any time:
+The server finds that environment on its own. Check it any time with:
 
 ```bash
 npm run laya:check
 ```
 
-> **Read this before you rely on the ranking.** The model is fast and local, but out
-> of the box it is **not accurate** at choosing web controls. Measured on the default
-> checkpoint it picks the wrong element for straightforward goals like "the email
-> address field", sometimes with high apparent confidence. It is a shortlist
-> generator, not an oracle. See [docs/laya.md](docs/laya.md) for the measurements, and
-> prefer explicit refs when you have them.
+You can skip this step entirely. Every tool still works; goals are matched by accessible
+name and role instead, and `browser_status` says which mode you are in rather than
+failing quietly.
+
+> **Before you rely on the ranking, read
+> [Honest status of the model](#honest-status-of-the-model) above.** It is fast, local
+> and free, and it is not accurate out of the box. It is a shortlist generator whose
+> picks are always verified, not an oracle.
 
 ## Usage
 
@@ -268,16 +336,20 @@ Off by default. Turn it on when you want to see what the ranker is doing:
 }
 ```
 
-Then open <http://127.0.0.1:7317/>. Each ranking call appears as it completes, with
-every candidate's score as a bar, the resulting order, which one was chosen, how many
+Then open <http://127.0.0.1:7317/>.
+
+![The dashboard showing a ranking where Laya and name matching disagree, a refused write, and two verified writes](docs/dashboard.png)
+
+Each ranking call appears as it completes, with every candidate's score as a bar, the resulting order, which one was chosen, how many
 were pruned before the model saw them, and how long it took. Writes appear too, marked
 verified or not.
 
-The dashboard states plainly that the scores are uncalibrated, because they are. It
-is loopback-only, serves no external requests, and if the port is unavailable the
-tools carry on without it.
+It also flags the disagreement between Laya and the deterministic matcher, and says
+when a ranking was too flat to be a decision at all.
 
-![the dashboard showing a ranking and the write that followed](docs/dashboard.png)
+The dashboard states plainly that the scores are uncalibrated, because they are. It is
+loopback-only, serves no external requests, and if the port is unavailable the tools
+carry on without it.
 
 ## How a write works
 
